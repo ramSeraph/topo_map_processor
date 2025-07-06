@@ -1,0 +1,16 @@
+[project]
+name = "topo_map_processor"
+version = "0.1.0"
+description = "Library for processing topographic maps"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "imgcat>=0.6.0",
+    "numpy>=2.3.1",
+    "opencv-python-headless>=4.11.0.86",
+    "pillow>=11.3.0",
+    "pyproj>=3.7.1",
+    "pytesseract>=0.3.13",
+    "rasterio>=1.4.3",
+    "shapely>=2.1.1",
+]
