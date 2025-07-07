@@ -8,25 +8,66 @@ import subprocess
 
 from pathlib import Path
 from functools import cmp_to_key
+from collections import namedtuple
 
 import cv2
 import numpy as np
 
 import pytesseract
+import easyocr
 from PIL import Image
 from imgcat import imgcat
 
-from shapely.ops import unary_union
+from shapely.ops import unary_union, nearest_points
 from shapely.geometry import (
     LineString, Polygon, box, LinearRing,
-    CAP_STYLE, JOIN_STYLE,
+    CAP_STYLE, JOIN_STYLE, Point
 )
 from shapely.affinity import translate
 from rasterio.control import GroundControlPoint
-from rasterio.transform import from_gcps, xy
+from rasterio.transform import GCPTransformer
 
 # remove decompression_bomb_check
 Image.MAX_IMAGE_PIXELS = None
+
+easy_ocr_reader = None
+
+# rotation_reversal_params
+RotationReversalParams = namedtuple('RotationReversalParams', ['rotated', 'angle', 'rotated_shape', 'original_shape'])
+
+LineRemovalParams = namedtuple('LineRemovalParams', ['line_buf_ratio', 'blur_buf_ratio', 'blur_kern_ratio', 'blur_repeat'])
+
+class GCPBasedTransformer:
+    def __init__(self, gcps):
+        self.pixel_map  = {}
+        self.cooord_map = {}
+        gcp_objs = []
+
+        for gcp in gcps:
+            corner = gcp[0]
+            idx    = gcp[1]
+            #print(f'adding gcp: {corner} -> {idx}')
+            self.pixel_map[(corner[1], corner[0])] = (idx[0], idx[1])
+            self.cooord_map[(idx[0], idx[1])] = (corner[0], corner[1])
+            gcp_obj = GroundControlPoint(row=corner[1], col=corner[0], x=idx[0], y=idx[1])
+            gcp_objs.append(gcp_obj)
+
+        self.transformer = GCPTransformer(gcp_objs, tps=True)
+
+
+    def xy(self, row, col, offset='center'):
+        if (row, col) in self.pixel_map:
+            return self.pixel_map[(row, col)]
+
+        x, y = self.transformer.xy([row], [col], offset=offset)
+        return (x[0].item(), y[0].item())
+
+    def rowcol(self, x, y):
+        if (x, y) in self.cooord_map:
+            return self.cooord_map[(x, y)]
+        rs, cs = self.transformer.rowcol([x], [y])
+        return (cs[0].item(), rs[0].item())
+
 
 class TopoMapProcessor:
     def __init__(self, filepath, extra, index_map):
@@ -39,6 +80,7 @@ class TopoMapProcessor:
         self.full_img = None
         self.small_img = None
         self.mapbox_corners = None
+        self.rotation_reversal_params = None
 
         self.extents = extra.get('extents', None)
         self.pixel_cutlines = extra.get('pixel_cutlines', [])
@@ -57,6 +99,7 @@ class TopoMapProcessor:
 
         # mapframe location related
         self.band_color = extra.get('band_color', 'black')
+        self.band_color_choices = []
         self.collar_erode = extra.get('collar_erode', -2)
         self.use_bbox_area = extra.get('use_bbox_area', True)
         self.shrunk_map_area_corners = extra.get('shrunk_map_area_corners', None)
@@ -67,7 +110,7 @@ class TopoMapProcessor:
         self.corner_overrides = extra.get('corner_overrides', None)
 
         # text removal related
-        self.remove_corner_text = extra.get('remove_corner_text', False)
+        self.text_removal_engine = extra.get('text_removal_engine', 'tesseract')
         self.text_removal_border = extra.get('text_removal_border', 0)
         self.text_removal_iterations = extra.get('text_removal_iterations', 1)
         self.text_removal_char_size_cutoff = extra.get('text_removal_char_size_cutoff', 30)
@@ -76,10 +119,11 @@ class TopoMapProcessor:
 
         # grid lines related
         self.should_remove_grid_lines = extra.get('should_remove_grid_lines', False)
-        self.remove_line_buf_ratio = extra.get('remove_line_buf_ratio', 2.0 / 6500.0)
-        self.remove_line_blur_buf_ratio = extra.get('remove_line_blur_buf_ratio', 14.0 / 6500.0)
-        self.remove_line_blur_kern_ratio = extra.get('remove_line_blur_kern_ratio', 9.0 / 6500.0)
-        self.remove_line_blur_repeat = extra.get('remove_line_blur_repeat', 2)
+        # leaving it around for what a sample config looks like
+        #self.remove_line_buf_ratio = extra.get('remove_line_buf_ratio', 2.0 / 6500.0)
+        #self.remove_line_blur_buf_ratio = extra.get('remove_line_blur_buf_ratio', 14.0 / 6500.0)
+        #self.remove_line_blur_kern_ratio = extra.get('remove_line_blur_kern_ratio', 9.0 / 6500.0)
+        #self.remove_line_blur_repeat = extra.get('remove_line_blur_repeat', 2)
 
         # georef related
         self.jpeg_export_quality = extra.get('jpeg_export_quality', 75)
@@ -129,13 +173,12 @@ class TopoMapProcessor:
     def ensure_dir(self, d):
         d.mkdir(parents=True, exist_ok=True)
 
-    def get_bbox_area(self, ctuple):
-        bbox = cv2.boundingRect(ctuple[0])
-        return bbox[2] * bbox[3]
-
     def get_bbox_area_simple(self, contour):
         bbox = cv2.boundingRect(contour)
         return bbox[2] * bbox[3]
+
+    def get_bbox_area(self, ctuple):
+        return self.get_bbox_area_simple(ctuple[0])
 
     def get_distance(self, p1, p2):
         p1 = np.array(p1)
@@ -148,7 +191,6 @@ class TopoMapProcessor:
         vector = p2 - p1
         angle_radians = np.arctan2(vector[1], vector[0])
         return np.degrees(angle_radians)
-
 
     def crop_img(self, img, bbox):
         x, y, w, h = bbox
@@ -226,6 +268,43 @@ class TopoMapProcessor:
 
         self.show_image(img_rgb)
 
+    def save_with_points(self, points_and_colors, img, out_file, radius=2):
+        if not isinstance(img, np.ndarray):
+            raise ValueError("Input image must be a numpy array")
+
+        h, w = img.shape[:2]
+
+        img = img.copy()
+
+        for point,color in points_and_colors:
+            center_x = int(point[0])
+            center_y = int(point[1])
+
+            # Define a bounding box around the point
+            x_start = max(0, center_x - radius)
+            y_start = max(0, center_y - radius)
+            x_end = min(w, center_x + radius + 1)
+            y_end = min(h, center_y + radius + 1)
+
+            if x_start >= x_end or y_start >= y_end:
+                continue
+
+            # Create a smaller ogrid within the bounding box
+            y_coords, x_coords = np.ogrid[y_start:y_end, x_start:x_end]
+
+            # Calculate distances and the circle_mask only for this smaller region
+            distances = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
+            circle_mask = distances <= radius
+
+            # Apply the circle_mask to the corresponding slice of the image
+            img_slice = img[y_start:y_end, x_start:x_end]
+            img_slice[circle_mask] = color
+
+        cv2.imwrite(str(out_file), img) 
+
+
+
+
     # translation methods
     def scale_bbox(self, bbox, rw, rh):
         b = bbox
@@ -233,10 +312,13 @@ class TopoMapProcessor:
     
     def scale_point(self, point, rw, rh):
         return [int(point[0]*rw), int(point[1]*rh)]
-    
-    def translate_bbox(self, bbox, ox, oy):
+     
+
+    def translate_point(self, point, bbox):
         b = bbox
-        return (b[0] + ox, b[1] + oy, b[2], b[3])
+        px = point[0]
+        py = point[1]
+        return (b[0] + px, b[1] + py)
 
     # copied form imutils and modified to take fill
     def rotate_image_bound(self, img, angle, fill_color=(255, 255, 255)):
@@ -265,6 +347,40 @@ class TopoMapProcessor:
                                      borderValue=fill_color)
 
         return rotated_img
+
+    def get_original_pixel_coordinate_internal(self, rotated_point, rotation_reversal_params):
+        """
+        Given a pixel coordinate in the rotated image, gives the pixel coordinate in the original image.
+        """
+
+        angle = rotation_reversal_params.angle
+        rotated_shape = rotation_reversal_params.rotated_shape 
+        original_shape = rotation_reversal_params.original_shape
+
+        (h, w) = original_shape
+        (nH, nW) = rotated_shape
+        (cX, cY) = (w / 2, h / 2)
+
+        # Recreate the forward transformation matrix M
+        M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
+        M[0, 2] += (nW / 2) - cX
+        M[1, 2] += (nH / 2) - cY
+
+        # Invert the transformation matrix
+        inv_M = cv2.invertAffineTransform(M)
+
+        # Apply the inverse transformation to the rotated point
+        x_rot, y_rot = rotated_point
+        x_orig = inv_M[0, 0] * x_rot + inv_M[0, 1] * y_rot + inv_M[0, 2]
+        y_orig = inv_M[1, 0] * x_rot + inv_M[1, 1] * y_rot + inv_M[1, 2]
+
+        x_orig = int(round(x_orig))
+        y_orig = int(round(y_orig))
+
+        if not (0 <= x_orig < w and 0 <= y_orig < h):
+            raise ValueError(f"Calculated original coordinates for {rotated_point} are out of bounds")
+
+        return (x_orig, y_orig)
 
     def get_color_ranges(self, color):
         if color not in self.color_map:
@@ -311,8 +427,12 @@ class TopoMapProcessor:
         return final_mask.astype(np.uint8)
 
 
-    def remove_line(self, line, map_img, line_buf_ratio,
-                    blur_buf_ratio, blur_kern_ratio, repeat):
+    def remove_line(self, line, map_img, removal_params):
+        line_buf_ratio = removal_params.line_buf_ratio
+        blur_buf_ratio = removal_params.blur_buf_ratio
+        blur_kern_ratio = removal_params.blur_kern_ratio
+        blur_repeat = removal_params.blur_repeat
+
         h, w = map_img.shape[:2]
 
         line_buf = round(line_buf_ratio * w)
@@ -343,7 +463,7 @@ class TopoMapProcessor:
         img_strip_padded = cv2.copyMakeBorder(img_strip, pad, pad, pad, pad, cv2.BORDER_REFLECT_101)
 
         img_blurred_padded = cv2.medianBlur(img_strip_padded, blur_kern)
-        for i in range(repeat):
+        for i in range(blur_repeat):
             img_blurred_padded = cv2.medianBlur(img_blurred_padded, blur_kern)
         img_blurred = img_blurred_padded[pad:pad+sh, pad:pad+sw]
         #cv2.imwrite('temp.jpg', img_blurred)
@@ -390,10 +510,50 @@ class TopoMapProcessor:
     
         return dmask, lines
 
-    def get_text_mask(self, img,
-                      border, iterations, 
-                      char_size_cutoff, confidence_cutoff,
-                      word_char_overlap_size_ratio_cutoff):
+    def get_text_mask_easyocr(self, img, border, iterations):
+        global easy_ocr_reader
+    
+        if easy_ocr_reader is None:
+            easy_ocr_reader = easyocr.Reader(['en'], gpu=False)
+    
+        mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    
+        # Detect text in the image
+        print("Detecting text...")
+        results = easy_ocr_reader.readtext(img, ycenter_ths=0.0, width_ths=0.0, link_threshold=100.0)
+        
+        if not results:
+            return mask
+        
+        print(f"Found {len(results)} text regions:")
+        
+        for (bbox, text, confidence) in results:
+            print(f"Text: '{text}' (Confidence: {confidence:.2f})")
+            
+            # Convert bbox to integer coordinates
+            points = np.array(bbox, dtype=np.int32)
+            
+            # Create a filled polygon on the mask
+            cv2.fillPoly(mask, [points], 255)
+            
+            if border == 0:
+                continue
+            # Optional: Add some padding around text regions
+            # This helps remove text more completely
+            if border > 0:
+                kernel = np.ones((border, border), np.uint8)
+                mask = cv2.dilate(mask, kernel, iterations=iterations)
+            else:
+                kernel = np.ones((-border, -border), np.uint8)
+                mask = cv2.erode(mask, kernel, iterations=iterations)
+    
+        return mask
+
+
+    def get_text_mask_tesseract(self, img,
+                                border, iterations, 
+                                char_size_cutoff, confidence_cutoff,
+                                word_char_overlap_size_ratio_cutoff):
         #display = img.copy()
         h = img.shape[0]
         mask = np.zeros(img.shape[:2], dtype=np.uint8)
@@ -408,6 +568,8 @@ class TopoMapProcessor:
             conf = int(float(d['conf'][i]))
             print(f"Text: '{text}', x: {x}, y: {y}, height: {wh}, width: {ww}, confidence: {conf}")
             if text.strip() == "":
+                continue
+            if ww == 0 or wh == 0:
                 continue
             if conf > confidence_cutoff:
                 #cv2.rectangle(display, (x, y), (x + ww, y + wh), (0, 255, 0), 2)
@@ -431,6 +593,9 @@ class TopoMapProcessor:
             if ch > char_size_cutoff or cw > char_size_cutoff:
                 continue
             if char.strip() == "":
+                continue
+
+            if cw == 0 or ch == 0:
                 continue
 
             char_shape = box(x1, h - y1, x2, h - y2)
@@ -471,13 +636,20 @@ class TopoMapProcessor:
 
         return mask
 
+    def get_transformer_from_gcps(self, gcps):
+        return GCPBasedTransformer(gcps)
+
     def get_full_file_path(self):
         workdir = self.get_workdir()
         rotated_img_file = workdir / 'full.rotated.jpg'
         if rotated_img_file.exists():
             return rotated_img_file
-        else:
-            return self.filepath
+
+        full_img_file = workdir / 'full.jpg'
+        if full_img_file.exists():
+            return full_img_file
+
+        return self.filepath
 
     def get_full_img(self):
         if self.full_img is not None:
@@ -569,36 +741,46 @@ class TopoMapProcessor:
 
         img = self.get_shrunk_img()
 
-        img_mask = self.get_color_mask(img, self.band_color)
+        band_color_choices = self.band_color_choices
+        if self.band_color is not None:
+            band_color_choices = [ self.band_color ]
 
-        if self.shrunk_map_area_corners is not None:
-            map_contour = np.array(self.shrunk_map_area_corners).reshape((-1,1,2)).astype(np.int32)
-        else:
-            print(f'getting {self.band_color} contours for whole image')
-            map_contour = self.get_biggest_contour(img_mask, self.collar_erode, self.use_bbox_area, 1.0)
+        for band_color in band_color_choices:
+            try:
+                print(f'getting {band_color} contours')
+                img_mask = self.get_color_mask(img, band_color)
 
-        self.show_contours(img_mask, [map_contour])
+                if self.shrunk_map_area_corners is not None:
+                    map_contour = np.array(self.shrunk_map_area_corners).reshape((-1,1,2)).astype(np.int32)
+                else:
+                    print(f'getting {band_color} contours for whole image')
+                    map_contour = self.get_biggest_contour(img_mask, self.collar_erode, self.use_bbox_area, 1.0)
 
-        map_bbox = cv2.boundingRect(map_contour)
-        map_min_rect = cv2.minAreaRect(map_contour)
-        map_area = map_bbox[2] * map_bbox[3]
-        print(f'{map_bbox=}')
-        print(f'{map_min_rect=}')
-        print(f'{map_area=}')
+                self.show_contours(img_mask, [map_contour])
 
-        h, w = img.shape[:2]
-        total_area = w * h
-        if total_area / map_area > 2:
-            raise Exception(f'map area less than expected, {map_area=}, {total_area=}')
+                map_bbox = cv2.boundingRect(map_contour)
+                map_min_rect = cv2.minAreaRect(map_contour)
+                map_area = map_bbox[2] * map_bbox[3]
+                print(f'{map_bbox=}')
+                print(f'{map_min_rect=}')
+                print(f'{map_area=}')
+
+                h, w = img.shape[:2]
+                total_area = w * h
+                if total_area / map_area > 2:
+                    raise Exception(f'map area less than expected, {map_area=}, {total_area=}')
     
-        self.show_contours(img_mask, [map_contour])
+                self.show_contours(img_mask, [map_contour])
 
-        self.ensure_dir(workdir)
-        with open(maparea_info_file, 'wb') as f:
-            pickle.dump((map_bbox, map_min_rect, map_contour), f)
+                self.ensure_dir(workdir)
+                with open(maparea_info_file, 'wb') as f:
+                    pickle.dump((map_bbox, map_min_rect, map_contour), f)
 
-        return map_bbox, map_min_rect, map_contour
+                return map_bbox, map_min_rect, map_contour
+            except Exception as e:
+                print(f'Error getting map area for {band_color}: {e}')
 
+        raise Exception(f'no map area found for {self.filepath}, band_color_choices: {band_color_choices}')
 
     def rotate(self):
         workdir = self.get_workdir()
@@ -636,6 +818,7 @@ class TopoMapProcessor:
         self.small_img = None
         self.full_img = None
 
+
     def locate_corners(self, img, corner_overrides):
 
         w = img.shape[1]
@@ -653,8 +836,18 @@ class TopoMapProcessor:
         corner_boxes.append(((x, y), (cw, ch)))
         corner_boxes.append(((x, 0), (cw, ch)))
     
-        directions = [(+1,+1), (+1,-1), (-1,-1), (-1,+1)]
-        anchor_angles = [45, -45, -135, 135]
+        directions = [
+            (+1,+1), 
+            (+1,-1), 
+            (-1,-1), 
+            (-1,+1),
+        ]
+        anchor_angles = [
+            45,
+            -45,
+            -135,
+            135,
+        ]
 
         # get intersection points
         points = []
@@ -704,17 +897,20 @@ class TopoMapProcessor:
 
     def remove_text(self, img_mask):
 
-        if not self.remove_corner_text:
-            return
- 
-        txt_mask = self.get_text_mask(img_mask, self.text_removal_border,
-                                      self.text_removal_iterations,
-                                      self.text_removal_char_size_cutoff,
-                                      self.text_removal_confidence_cutoff,
-                                      self.text_removal_word_char_overlap_size_ratio_cutoff)
+        if self.text_removal_engine == 'tesseract':
+            txt_mask = self.get_text_mask_tesseract(img_mask, self.text_removal_border,
+                                                    self.text_removal_iterations,
+                                                    self.text_removal_char_size_cutoff,
+                                                    self.text_removal_confidence_cutoff,
+                                                    self.text_removal_word_char_overlap_size_ratio_cutoff)
+        else:
+            txt_mask = self.get_text_mask_easyocr(img_mask,
+                                                  self.text_removal_border, 
+                                                  self.text_removal_iterations)
 
         
 
+        self.show_image(txt_mask)
         img_mask[txt_mask > 0] = 0
 
 
@@ -756,13 +952,14 @@ class TopoMapProcessor:
         exts = [ c > ext_thresh*factor*(2*cwidth + 1)/3 for c in counts ]
         return exts.count(True)
  
-    def get_line_intersections(self, img_mask, find_line_scale, find_line_iter):
+    def get_line_intersections(self, img_mask, find_line_scale, find_line_iter, print_lines=True):
         h, w = img_mask.shape[:2]
 
         v_mask, v_lines = self.find_lines(img_mask, direction='vertical', line_scale=find_line_scale, iterations=find_line_iter)
         h_mask, h_lines = self.find_lines(img_mask, direction='horizontal', line_scale=find_line_scale, iterations=find_line_iter)
-        print(f'{v_lines=}')
-        print(f'{h_lines=}')
+        if print_lines:
+            print(f'{v_lines=}')
+            print(f'{h_lines=}')
     
         ips = []
         only_lines = np.multiply(v_mask, h_mask)
@@ -777,15 +974,18 @@ class TopoMapProcessor:
 
     def get_nearest_intersection_point(self, img, 
                                        direction, anchor_angle,
-                                       line_color, expect_band_count,
+                                       line_color, remove_text, expect_band_count,
                                        find_line_scale, find_line_iter, 
                                        corner_max_dist_ratio, corner_min_dist_ratio,
-                                       min_expected_points, max_corner_angle_diff):
+                                       min_expected_points, max_corner_angle_diff,
+                                       max_corner_angle_diff_cutoff):
 
         img_mask = self.get_color_mask(img, line_color)
         h, w = img_mask.shape[:2]
         diag_len = self.get_distance((0,0), (h,w))
 
+        if remove_text:
+            self.remove_text(img_mask)
         anchor_corner = [
             0 + w * ( 1 if direction[0] < 0 else 0), 
             0 + h * ( 1 if direction[1] < 0 else 0), 
@@ -798,7 +998,7 @@ class TopoMapProcessor:
 
         self.show_points(ips, img_mask, [255,0,0])
 
-        sorted_ips = sorted(ips, key=lambda p: (p[0]*direction[0], p[1]*direction[1]))
+        sorted_ips = sorted(ips, key=lambda p: (self.get_distance(p, anchor_corner), p[0]*direction[0], p[1]*direction[1]))
         if expect_band_count > 0:
             anchor_point = sorted_ips[0]
             diag_len = abs(diag_len - self.get_distance(anchor_corner, anchor_point))
@@ -807,9 +1007,15 @@ class TopoMapProcessor:
         else:
             remaining = sorted_ips
             anchor_point = anchor_corner
+ 
+        angles_before = [ abs(self.get_angle(anchor_point, r) - anchor_angle) for r in remaining ]
+        distances_before = [ self.get_distance(anchor_point, r)/diag_len for r in remaining ]
+        print(f'{angles_before=}')
+        print(f'{distances_before=}')
 
         remaining = [ r for r in remaining 
-                      if corner_max_dist_ratio > self.get_distance(anchor_point, r)/diag_len > corner_min_dist_ratio ]
+                      if corner_max_dist_ratio > self.get_distance(anchor_point, r)/diag_len > corner_min_dist_ratio and
+                      abs(self.get_angle(anchor_point, r) - anchor_angle) < max_corner_angle_diff_cutoff ]
 
         if len(remaining) < min_expected_points:
             raise Exception('too few remaining points')
@@ -893,11 +1099,11 @@ class TopoMapProcessor:
 
     def get_biggest_contour_corner(self, img,
                                    direction, anchor_angle,
-                                   line_color, remove_corner_edges_ratio,
+                                   line_color, remove_text, remove_corner_edges_ratio,
                                    corner_erode, max_corner_contour_area_ratio,
                                    min_corner_contour_area_ratio,
                                    min_corner_dist_ratio, max_corner_angle_diff,
-                                   pixel_adjustment):
+                                   pixel_adjustment, picked_corner_max_dist_from_contour_ratio):
         img_mask = self.get_color_mask(img, line_color)
 
 
@@ -905,7 +1111,8 @@ class TopoMapProcessor:
         area = h * w
         diag_len = self.get_distance((0,0), (h,w))
 
-        self.remove_text(img_mask)
+        if remove_text:
+            self.remove_text(img_mask)
 
         ax = w * (0 if direction[0] > 0 else 1)
         ay = h * (0 if direction[1] > 0 else 1)
@@ -916,6 +1123,8 @@ class TopoMapProcessor:
 
         frame_contour = self.get_biggest_contour(img_mask, corner_erode, True, max_corner_contour_area_ratio)
 
+        self.show_contours(img_mask, [frame_contour])
+
         frame_contour_area = self.get_bbox_area_simple(frame_contour)
         print(f'{area=}, {frame_contour_area=}, {frame_contour_area/area=}')
 
@@ -923,7 +1132,7 @@ class TopoMapProcessor:
             self.show_contours(img_mask, [frame_contour[0]])
             raise Exception(f'corner too small, {frame_contour_area/area}')
 
-        bbox = cv2.boundingRect(frame_contour[0])
+        bbox = cv2.boundingRect(frame_contour)
         x_factor = 0 if direction[0] > 0 else 1
         y_factor = 0 if direction[1] > 0 else 1
         ip = [bbox[0] + (x_factor*bbox[2]), bbox[1] + (y_factor*bbox[3])]
@@ -932,16 +1141,96 @@ class TopoMapProcessor:
 
         dist  = self.get_distance(anchor_corner, ip)
         angle = self.get_angle(anchor_corner, ip)
-        print(f'{anchor_corner=} {dist=} {angle=}')
         dist_ratio = dist/diag_len
+        print(f'{dist_ratio=} {angle=}')
         if dist_ratio < min_corner_dist_ratio:
-            raise Exception(f'{dist_ratio=} too small')
+            raise Exception(f'{dist_ratio=} smaller than {min_corner_dist_ratio=}')
 
         angle_delta = abs(angle - anchor_angle)
 
         if angle_delta > max_corner_angle_diff:
             raise Exception(f'{angle_delta=} too big')
 
+        # check if the intersection point is on the contour
+        dist_from_contour = cv2.pointPolygonTest(frame_contour, (ip[0], ip[1]), True)
+        dist_from_contour = -dist_from_contour
+        print(f'{dist_from_contour=}')
+        max_dist = picked_corner_max_dist_from_contour_ratio * diag_len
+        if dist_from_contour > max_dist:
+            raise Exception(f'corner point {ip} too far from contour {dist_from_contour=} > {max_dist=}')
+        elif dist_from_contour > 0:
+            adjustment = dist_from_contour
+            ip = [ ip[0] + adjustment*direction[0], ip[1] + adjustment*direction[1] ]
+            #contour_poly = Polygon(frame_contour.reshape(-1, 2))
+            #picked_point = Point(ip[0], ip[1])
+            #p1, _ = nearest_points(contour_poly, picked_point)
+            #ip = [int(p1.x), int(p1.y)]
+            self.show_points([ip], img_mask, [0,255,0])
+
+        return ip
+
+    def get_nearest_intersection_point_from_biggest_corner_contour(self, img,
+                                                                   direction, anchor_angle,
+                                                                   line_color, corner_contour_color,
+                                                                   remove_corner_edges_ratio, corner_erode,
+                                                                   max_corner_contour_area_ratio, min_corner_contour_area_ratio,
+                                                                   find_line_scale, find_line_iter,
+                                                                   max_corner_angle_diff_cutoff, max_corner_angle_diff,
+                                                                   corner_max_dist_ratio):
+
+        h,w = img.shape[:2]
+        area = h * w
+
+        img_c_mask = self.get_color_mask(img, corner_contour_color)
+        self.remove_text(img_c_mask)
+        self.remove_corner_edges(img_c_mask, direction, self.remove_corner_edges_ratio)
+        frame_contour = self.get_biggest_contour(img_c_mask, self.corner_erode, True, max_corner_contour_area_ratio)
+
+        frame_contour_area = self.get_bbox_area_simple(frame_contour)
+        print(f'{area=}, {frame_contour_area=}, {frame_contour_area/area=}')
+        self.show_contours(img_c_mask, [frame_contour])
+
+        if frame_contour_area < min_corner_contour_area_ratio * area:
+            raise Exception(f'corner too small, {frame_contour_area/area}')
+
+        frame_bbox = cv2.boundingRect(frame_contour)
+        fx = frame_bbox[0]
+        fy = frame_bbox[1]
+        fw = frame_bbox[2]
+        fh = frame_bbox[3]
+
+        frame_anchor_point = [
+            fx + fw * ( 1 if direction[0] < 0 else 0), 
+            fy + fh * ( 1 if direction[1] < 0 else 0), 
+        ]
+        frame_diag_len = self.get_distance((0,0), (fh,fw))
+        self.show_points([frame_anchor_point], img_c_mask, [0,0,255])
+
+
+        img_mask = self.get_color_mask(img, line_color)
+        #self.remove_text(img_mask)
+        ips = self.get_line_intersections(img_mask, find_line_scale, find_line_iter)
+        ips = [ ip for ip in ips if fx < ip[0] < fx + fw and fy < ip[1] < fy + fh ]
+        self.show_points(ips, img_mask, [255,0,0])
+
+        angles_before = [ abs(self.get_angle(frame_anchor_point, r) - anchor_angle) for r in ips ]
+        distances_before = [ self.get_distance(frame_anchor_point, r)/frame_diag_len for r in ips ]
+        print(f'{angles_before=}')
+        print(f'{distances_before=}')
+        ips = [ ip for ip in ips if abs(self.get_angle(frame_anchor_point, ip) - anchor_angle) < max_corner_angle_diff_cutoff ]
+
+        #sorted_ips = sorted(ips, key=lambda p: (p[0]*direction[0], p[1]*direction[1]))
+        angles = [ abs(self.get_angle(frame_anchor_point, r) - anchor_angle) for r in ips ]
+        distances = [ self.get_distance(frame_anchor_point, r)/frame_diag_len for r in ips ]
+        print(f'{angles=}')
+        print(f'{distances=}')
+        dist_min_index = np.argmin(np.array(distances))
+        distance = distances[dist_min_index]
+        angle = angles[dist_min_index]
+        ip = ips[dist_min_index]
+        if distance > corner_max_dist_ratio or angle > max_corner_angle_diff:
+            raise Exception(f'corner too far or angle too far, {distance=}, {angle=}, {corner_max_dist_ratio=}, {max_corner_angle_diff=}')
+        self.show_points([ip], img_mask, [0,255,0])
         return ip
 
 
@@ -1067,11 +1356,161 @@ class TopoMapProcessor:
 
         return corners
 
+    def get_between(self, start, end, divisible_by):
+        """
+        Get a list of numbers between start and end that are divisible by divisible_by.
+        The numbers are multiplied by factor.
+        """
 
-    def locate_grid_lines(self, corners):
-        raise Exception("This method should be implemented in a subclass")
+        if start % divisible_by != 0:
+            start += divisible_by - (start % divisible_by)
+        if end % divisible_by != 0:
+            end -= end % divisible_by
 
-    def remove_grid_lines(self, corners):
+        return [ (i * divisible_by ) for i in range(start // divisible_by, end // divisible_by + 1) ]
+
+    def correct_intersection(self, point,
+                             line_color_choices, context_dim,
+                             find_line_scale, find_line_iter):
+
+        ch, cw = context_dim
+        p = (int(point[0]), int(point[1]))
+        full_img = self.get_full_img()
+        # context dim is the size of the image around the intersection point
+        # lets crop to that size
+        bbox = (p[0] - cw, p[1] - ch, cw * 2, ch * 2)
+        img = self.crop_img(full_img, bbox)
+        if img.size == 0 or img.shape[0] == 0 or img.shape[1] == 0:
+            return { 'point': p, 'type': 'invalid' }
+
+        ip = None
+        for line_color in line_color_choices:
+            img_mask = self.get_color_mask(img, line_color)
+            # get the intersection point in the cropped image
+            ips = self.get_line_intersections(img_mask, find_line_scale, find_line_iter, print_lines=False)
+            #self.show_points(ips, img_mask, [255,0,0], radius=5)
+            if len(ips) > 1:
+                return { 'point': point, 'type': 'too_many_choices' }
+            
+            if len(ips) == 0:
+                continue
+
+            ip = ips[0]
+
+        if ip is None:
+            return { 'point': point, 'type': 'no_choices' }
+
+        ip = self.translate_point(ip, bbox)
+
+        return { 'point': ip, 'type': 'unchanged' if p == ip else 'corrected' }
+
+    def get_grid_line_corrections(self, points, bounds_check_buffer,
+                                  line_color_choices, context_dim,
+                                  find_line_scale, find_line_iter):
+
+        full_pixel_cutline = self.get_full_pixel_cutline()
+        cutline_poly = Polygon([tuple(p) for p in full_pixel_cutline])
+        cutline_poly_buffered = cutline_poly.buffer(bounds_check_buffer, join_style=JOIN_STYLE.mitre)
+
+        corrections = {}
+
+        for p in points:
+
+            if not cutline_poly_buffered.contains(Point(p)):
+                corrections[p] = { 'point': p, 'type': 'invalid' }
+                continue
+
+            correction = self.correct_intersection(p, line_color_choices, context_dim, find_line_scale, find_line_iter)
+            corrections[p] = correction
+
+        return corrections
+
+
+
+    def locate_grid_lines_using_trasformer(self, transformer, factor, divisible_by, bounds_check_buffer):
+
+        full_pixel_cutline = self.get_full_pixel_cutline()
+        cutline_poly = Polygon([tuple(p) for p in full_pixel_cutline])
+        cutline_poly_buffered = cutline_poly.buffer(bounds_check_buffer, join_style=JOIN_STYLE.mitre)
+
+        full_pixel_cutline_xy = []
+        for p in full_pixel_cutline:
+            x, y = transformer.xy(p[1], p[0])
+            full_pixel_cutline_xy.append((x, y))
+
+        cutline_poly_xy = Polygon(full_pixel_cutline_xy)
+
+        cutline_poly_xy_bbox = list(cutline_poly_xy.bounds)
+
+        cutline_poly_xy_bbox_rounded_scaled = [ round(c * factor) for c in cutline_poly_xy_bbox ]
+        xmin_scaled = cutline_poly_xy_bbox_rounded_scaled[0]
+        ymin_scaled = cutline_poly_xy_bbox_rounded_scaled[1]
+        xmax_scaled = cutline_poly_xy_bbox_rounded_scaled[2]
+        ymax_scaled = cutline_poly_xy_bbox_rounded_scaled[3]
+
+        print(f'cutline_poly_xy_bbox: {cutline_poly_xy_bbox}')
+
+        xlocs_scaled = self.get_between(xmin_scaled, xmax_scaled, divisible_by)
+        ylocs_scaled = self.get_between(ymin_scaled, ymax_scaled, divisible_by)
+
+        xlocs = [ (x / factor) for x in xlocs_scaled ]
+        ylocs = [ (y / factor) for y in ylocs_scaled ]
+
+        print(f'xlocs: {xlocs}')
+        print(f'ylocs: {ylocs}')
+
+        intersections_scaled = []
+        for x in xlocs_scaled:
+            for y in ylocs_scaled:
+                intersections_scaled.append((x, y))
+
+        lines_xy_scaled = []
+        for inter in intersections_scaled:
+            x, y = inter
+            line1 = (
+                (x, y),
+                (x + divisible_by, y)
+            )
+            line2 = (
+                (x - divisible_by, y), 
+                (x, y)
+            )
+            line3 = (
+                (x, y), 
+                (x, y + divisible_by)
+            )
+            line4 = (
+                (x, y - divisible_by),
+                (x, y)
+            )
+            lines_xy_scaled += [line1, line2, line3, line4]
+
+        lines_xy = [
+            (
+                (x1 / factor, y1 / factor),
+                (x2 / factor, y2 / factor)
+            )
+            for (x1, y1), (x2, y2) in lines_xy_scaled
+        ]
+        lines_xy = set(lines_xy)
+
+        lines = []
+        lines_xy_filtered = []
+        for line in lines_xy:
+            p1 = transformer.rowcol(line[0][0], line[0][1])
+            p2 = transformer.rowcol(line[1][0], line[1][1]) 
+            point1 = Point(p1)
+            point2 = Point(p2)
+            if cutline_poly_buffered.contains(point1) or cutline_poly_buffered.contains(point2):
+                lines.append((p1, p2))
+                lines_xy_filtered.append(line)
+
+        return lines, lines_xy_filtered
+
+    def locate_grid_lines(self):
+        raise NotImplementedError("This method should be implemented in a subclass")
+
+    def remove_grid_lines(self):
         workdir = self.get_workdir()
 
         nogrid_file = workdir.joinpath('nogrid.jpg')
@@ -1079,21 +1518,18 @@ class TopoMapProcessor:
             print(f'{nogrid_file} file exists.. skipping')
             return
 
-        grid_lines = self.locate_grid_lines(corners)
+        grid_lines = self.locate_grid_lines()
         if len(grid_lines) == 0:
             return
 
-        map_img = self.get_map_img()
+        full_img = self.get_full_img()
+        full_img = full_img.copy()
         print('dropping grid lines')
-        for line in grid_lines:
-            self.remove_line(line, map_img,
-                             self.remove_line_buf_ratio, 
-                             self.remove_line_blur_buf_ratio, 
-                             self.remove_line_blur_kern_ratio, 
-                             self.remove_line_blur_repeat)
+        for line, params in grid_lines:
+            self.remove_line(line, full_img, params)
 
         self.ensure_dir(workdir)
-        cv2.imwrite(str(nogrid_file), map_img)
+        cv2.imwrite(str(nogrid_file), full_img)
 
     def georeference(self):
         workdir = self.get_workdir()
@@ -1104,13 +1540,10 @@ class TopoMapProcessor:
             print(f'{georef_file} or {final_file} exists.. skipping')
             return
 
-        corners = self.get_corners()
-        print(corners)
-
         from_file = self.get_full_file_path()
 
         if self.should_remove_grid_lines:
-            self.remove_grid_lines(corners)
+            self.remove_grid_lines()
             from_file = workdir.joinpath('nogrid.jpg')
 
         ibox = self.get_sheet_ibox()
@@ -1118,33 +1551,47 @@ class TopoMapProcessor:
 
         crs_proj = self.get_crs_proj()
 
-        if len(ibox) - 1 != len(corners):
-            raise Exception(f'{len(ibox) - 1=} != {len(corners)=}')
+        gcps = self.get_gcps()
 
         gcp_str = ''
-        for idx, c in enumerate(corners):
-            i = ibox[idx]
-            gcp_str += f' -gcp {c[0]} {c[1]} {i[0]} {i[1]}'
+        for gcp in gcps:
+            corner = gcp[0]
+            idx    = gcp[1]
+            gcp_str += f' -gcp {corner[0]} {corner[1]} {idx[0]} {idx[1]}'
+        
+        creation_options = '-co TILED=YES -co COMPRESS=DEFLATE -co PREDICTOR=2' 
         perf_options = '--config GDAL_CACHEMAX 128 --config GDAL_NUM_THREADS ALL_CPUS'
 
-        translate_cmd = f'gdal_translate {perf_options} {gcp_str} -a_srs "{crs_proj}" -of GTiff {str(from_file)} {str(georef_file)}' 
+        translate_cmd = f'gdal_translate {creation_options} {perf_options} {gcp_str} -a_srs "{crs_proj}" -of GTiff {str(from_file)} {str(georef_file)}' 
         self.run_external(translate_cmd)
 
+    def get_cutline_props(self):
+        crs_proj = self.get_crs_proj()
+
+        props = {
+            'id': self.get_id(),
+            'crs': crs_proj,
+            'gcps': self.get_gcps(pre_rotated=True),
+            'pixel_cutline': self.get_full_pixel_cutline(pre_rotated=True),
+        }
+        return props
+
     def create_cutline(self, ibox, file):
+        cutline_data = {
+            "type": "FeatureCollection",
+            "name": "CUTLINE",
+            "features": [{
+                "type": "Feature",
+                "properties": self.get_cutline_props(),
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [ibox]
+                }
+            }]
+        }
+
         self.ensure_dir(file.parent)
         with open(file, 'w') as f:
-            cutline_data = {
-                "type": "FeatureCollection",
-                "name": "CUTLINE",
-                "features": [{
-                    "type": "Feature",
-                    "properties": {},
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [ibox]
-                    }
-                }]
-            }
             json.dump(cutline_data, f, indent=4)
 
     def get_scale(self):
@@ -1155,9 +1602,84 @@ class TopoMapProcessor:
 
     def get_resolution(self):
         # 1:25000 is 2.1166 for 300 dpi like effect?
+        # TODO: explain the calculation
         scale = self.get_scale()
         ratio = scale / 25000
         return round(2.1166 * ratio, 4)
+
+    def get_full_pixel_cutline(self, pre_rotated=False):
+
+        corners = self.get_corners()
+        corners = corners + [corners[0]]  # close the polygon
+
+        corners_poly = Polygon([tuple(p) for p in corners])
+        extra_polys = []
+        for pixel_cutline in self.pixel_cutlines:
+            extra_poly = Polygon([tuple(p) for p in pixel_cutline])
+            extra_polys.append(extra_poly)
+
+        full_poly = unary_union([corners_poly] + extra_polys)
+        if full_poly.geom_type != 'Polygon':
+            raise Exception(f'expected full_poly to be a Polygon, got {full_poly.geom_type}')
+        full_poly_points = list(full_poly.exterior.coords)
+        full_poly_points.reverse()
+        full_poly_points = [ (int(p[0]), int(p[1])) for p in full_poly_points ]
+        if pre_rotated:
+            full_poly_points = [ self.get_original_pixel_coordinate((p[0], p[1])) for p in full_poly_points ]
+
+        return full_poly_points
+
+    def get_rotation_reversal_params(self):
+        if self.rotation_reversal_params is not None:
+            return self.rotation_reversal_params
+
+        workdir = self.get_workdir()
+        rotated_info_file = workdir.joinpath('rotated_info.txt')
+        if not rotated_info_file.exists():
+            raise Exception(f'rotated_info.txt does not exist in {workdir}')
+
+        parts = rotated_info_file.read_text().strip().split(',')
+        angle = float(parts[0])
+        rotated = parts[1].strip() == 'rotated'
+
+        if not rotated:
+            self.rotation_reversal_params = RotationReversalParams(False, -angle, None, None)
+            return self.rotation_reversal_params
+
+        rotated_shape = self.get_full_img().shape[:2]
+        orig_file = workdir / 'full.jpg'
+        if not orig_file.exists():
+            orig_file = self.filepath
+        original_shape = cv2.imread(str(orig_file)).shape[:2]
+        self.rotation_reversal_params = RotationReversalParams(True, -angle, rotated_shape, original_shape)
+
+        return self.rotation_reversal_params
+
+    def get_original_pixel_coordinate(self, p):
+        rotation_reversal_params = self.get_rotation_reversal_params()
+
+        if not rotation_reversal_params.rotated:
+            return p
+
+        return self.get_original_pixel_coordinate_internal(p, rotation_reversal_params)
+
+    def get_gcps(self, pre_rotated=False):
+        corners = self.get_corners()
+        if pre_rotated:
+            corners = [ self.get_original_pixel_coordinate((c[0], c[1])) for c in corners ]
+
+        ibox = self.get_sheet_ibox()
+
+        if len(ibox) - 1 != len(corners):
+            raise Exception(f'{len(ibox) - 1=} != {len(corners)=}')
+
+        gcps = []
+        for i, corner in enumerate(corners):
+            idx = ibox[i]
+            gcp = [[corner[0], corner[1]], [idx[0], idx[1]]]
+            gcps.append(gcp)
+
+        return gcps
 
     def warp_file(self, box, cline_file, georef_file, f_file, jpeg_quality, set_resolution=True):
         img_quality_config = {
@@ -1169,6 +1691,7 @@ class TopoMapProcessor:
         crs_proj = self.get_crs_proj()
 
         self.create_cutline(box, cline_file)
+
         cutline_options = f'-cutline {str(cline_file)} -cutline_srs "{crs_proj}" -crop_to_cutline --config GDALWARP_IGNORE_BAD_CUTLINE YES -wo CUTLINE_ALL_TOUCHED=TRUE'
 
         warp_quality_config = img_quality_config.copy()
@@ -1186,47 +1709,36 @@ class TopoMapProcessor:
         warp_cmd = f'gdalwarp -overwrite {perf_options} {nodata_options} {reproj_options} {warp_quality_options} {cutline_options} {str(georef_file)} {str(f_file)}'
         self.run_external(warp_cmd)
 
-    def update_sheet_ibox(self, sheet_ibox):
+    def get_updated_sheet_ibox(self):
         if len(self.pixel_cutlines) == 0:
-            return sheet_ibox
+            return self.get_sheet_ibox()
 
-        sheet_poly = Polygon([tuple(p) for p in sheet_ibox])
+        gcps = self.get_gcps()
+        transformer = self.get_transformer_from_gcps(gcps)
 
-        corners = self.get_corners()
-        gcps = []
-        for i, corner in enumerate(corners):
-            idx = sheet_ibox[i]
-            gcp = GroundControlPoint(row=corner[1], col=corner[0], x=idx[0], y=idx[1])
-            gcps.append(gcp)
-        transformer = from_gcps(gcps)
-
-        extra_polys = []
-        for pixel_cutline in self.pixel_cutlines:
-            points = []
-            for p in pixel_cutline:
-                x, y = xy(transformer, [p[1]], [p[0]])
-                points.append((x[0], y[0]))
-            extra_poly = Polygon(points)
-            extra_polys.append(extra_poly)
-
-        sheet_poly = unary_union([sheet_poly] + extra_polys)
-        if sheet_poly.geom_type != 'Polygon':
-            raise Exception(f'expected sheet_poly to be a Polygon, got {sheet_poly.geom_type}')
-        #print(f'updated sheet ibox: {sheet_poly}')
-        sheet_ibox = list(sheet_poly.exterior.coords)
-        print(f'updated sheet ibox: {sheet_ibox}')
-        sheet_ibox.reverse()
+        sheet_ibox = []
+        full_pixel_cutline = self.get_full_pixel_cutline()
+        for p in full_pixel_cutline:
+            x, y = transformer.xy(p[1], p[0])
+            sheet_ibox.append((x, y))
 
         return sheet_ibox
 
-    def export_sheet_ibox(self, sheet_ibox):
+    def export_bounds_file(self):
         bounds_dir = self.get_bounds_dir()
+
+        bounds_file = bounds_dir.joinpath(f'{self.get_id()}.geojsonl')
+        if bounds_file.exists():
+            print(f'{bounds_file} exists.. overwriting')
+            bounds_file.unlink()
+
         self.ensure_dir(bounds_dir)
 
-        bounds_file = bounds_dir.joinpath(f'{self.get_id()}.json')
-        # TODO: convert to wgs84
-        # save the gcps and the bounding box in pixels as well? maybe write out the feature with properties
-        bounds_file.write_text(json.dumps({'type': 'Polygon', 'coordinates': [sheet_ibox]}) + '\n')
+        workdir = self.get_workdir()
+        cutline_file = workdir.joinpath('cutline.geojson')
+        crs_proj = self.get_crs_proj()
+
+        self.run_external(f'ogr2ogr -t_srs EPSG:4326 -s_srs "{crs_proj}" -f GeoJSONSeq {str(bounds_file)} {cutline_file}')
 
     def warp(self):
         workdir = self.get_workdir()
@@ -1238,31 +1750,33 @@ class TopoMapProcessor:
             print(f'{final_file} exists.. skipping')
             return
 
-        sheet_ibox = self.get_sheet_ibox()
-        sheet_ibox = self.update_sheet_ibox(sheet_ibox)
+        sheet_ibox = self.get_updated_sheet_ibox()
         
         self.warp_file(sheet_ibox, cutline_file, georef_file, final_file, self.warp_jpeg_export_quality)
-        self.export_sheet_ibox(sheet_ibox)
 
-    def export_internal(self, filename, out_filename, jpeg_export_quality):
+    def export_gtiff(self, filename, out_filename, jpeg_export_quality):
         if Path(out_filename).exists():
             print(f'{out_filename} exists.. skipping export')
             return
-        # TODO: export as COG
-        creation_opts = f'-co TILED=YES -co COMPRESS=JPEG -co JPEG_QUALITY={jpeg_export_quality} -co PHOTOMETRIC=YCBCR' 
+        creation_opts = f'-co TILING_SCHEME=GoogleMapsCompatible -co COMPRESS=JPEG -co QUALITY={jpeg_export_quality}' 
         mask_options = '--config GDAL_TIFF_INTERNAL_MASK YES  -b 1 -b 2 -b 3 -mask 4'
         perf_options = '--config GDAL_CACHEMAX 512'
-        cmd = f'gdal_translate {perf_options} {mask_options} {creation_opts} {filename} {out_filename}'
+        cog_options = '-of COG'
+        cmd = f'gdal_translate {perf_options} {mask_options} {creation_opts} {cog_options} {filename} {out_filename}'
         self.run_external(cmd)
 
     def export(self):
+
+        self.export_bounds_file()
+
         export_file = self.get_export_file()
 
         self.ensure_dir(export_file.parent)
 
         final_file = self.get_workdir().joinpath('final.tif')
 
-        self.export_internal(str(final_file), str(export_file), self.jpeg_export_quality)
+        self.export_gtiff(str(final_file), str(export_file), self.jpeg_export_quality)
+
 
     def process(self):
         export_file = self.get_export_file()
