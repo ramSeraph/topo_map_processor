@@ -126,18 +126,22 @@ I would recommend looking at the [nepal_survey_maps](https://github.com/ramSerap
 
 The `get_intersection_point` method is the most critical part to customize for a new map series. The library provides several helper methods that can be used to implement this logic, each suited for different types of corner features:
 
+![corner for nearest intersection point](/samples/corner3.png)
 -   **`get_nearest_intersection_point`**: This method is useful when the map corners are defined by the intersection of two perpendicular lines (like a simple crosshair). It works by:
     1.  Detecting all horizontal and vertical lines in the corner region.
     2.  Finding all intersection points between these lines.
     3.  Identifying the point closest to the expected corner position, while also matching an expected angle and distance from an anchor point.
 
+![corner for 4way intersection point](/samples/corner3.png)
 -   **`get_4way_intersection_point`**: This is a more robust version for crosshair-style corners. It specifically looks for intersections where four lines meet, making it less prone to errors from stray lines in the map collar.
 
+![corner for biggest contour corner](/samples/corner2.png)
 -   **`get_biggest_contour_corner`**: This strategy is designed for corners that are marked by a solid shape or a filled area (e.g., a colored square or circle). It works by:
     1.  Isolating the specific color of the corner feature.
     2.  Finding the largest contour (shape) of that color in the corner region.
     3.  Returning the outermost point of that contour as the corner.
 
+![corner for nearest intersection point from biggest corner contour](/samples/corner1.png)
 -   **`get_nearest_intersection_point_from_biggest_corner_contour`**: This is a hybrid approach. It first uses the "biggest contour" method to locate a general corner area (e.g., a colored box) and then searches for a precise line intersection *within* that area. This is effective for maps that have both a colored corner block and a fine crosshair inside it.
 
 By combining these methods in your subclass's implementation of `get_intersection_point`, you can build a reliable corner detection system for your specific map type.
