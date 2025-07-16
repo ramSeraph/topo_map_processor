@@ -36,7 +36,11 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Build the project
-        run: uv build
+        run: |
+            version=${{ github.ref_name }}
+            version=${version#v}
+            export SETUPTOOLS_SCM_PRETEND_VERSION=$version
+            uv build
 
       - name: Publish distribution 
         run: uv publish
