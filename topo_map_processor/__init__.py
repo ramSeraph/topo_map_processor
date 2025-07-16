@@ -300,7 +300,46 @@ class TopoMapProcessor:
             img_slice = img[y_start:y_end, x_start:x_end]
             img_slice[circle_mask] = color
 
-        cv2.imwrite(str(out_file), img) 
+        cv2.imwrite(str(out_file), img)
+
+    def save_with_lines(self, line_and_color_pairs, img, out_file, thickness=2):
+        if not isinstance(img, np.ndarray):
+            raise ValueError("Input image must be a numpy array")
+
+        img = img.copy()
+
+        for line, color in line_and_color_pairs:
+            p1 = (int(line[0][0]), int(line[0][1]))
+            p2 = (int(line[1][0]), int(line[1][1]))
+            cv2.line(img, p1, p2, color, thickness)
+            cv2.circle(img, p1, thickness * 2, color, -1)
+            cv2.circle(img, p2, thickness * 2, color, -1)
+
+        cv2.imwrite(str(out_file), img)
+
+    def save_cutline(self, multipolygon):
+        line_and_color_pairs = []
+        colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (255, 255, 0), (0, 255, 255), (255, 0, 255)] # B, G, R, Y, C, M
+        color_idx = 0
+        for polygon in multipolygon.geoms:
+            # Exterior ring
+            exterior_points = list(polygon.exterior.coords)
+            current_color = colors[color_idx % len(colors)]
+            color_idx += 1
+            for i in range(len(exterior_points) - 1):
+                line_and_color_pairs.append(((exterior_points[i], exterior_points[i+1]), current_color))
+
+            # Interior rings
+            for interior_ring in polygon.interiors:
+                interior_points = list(interior_ring.coords)
+                current_color = colors[color_idx % len(colors)]
+                color_idx += 1
+                for i in range(len(interior_points) - 1):
+                    line_and_color_pairs.append(((interior_points[i], interior_points[i+1]), current_color))
+        self.save_with_lines(line_and_color_pairs,
+                              self.get_full_img(), 
+                              self.get_workdir() / 'with_full_cutline.jpg',
+                              thickness=2)
 
 
 
@@ -1620,6 +1659,9 @@ class TopoMapProcessor:
 
         full_poly = unary_union([corners_poly] + extra_polys)
         if full_poly.geom_type != 'Polygon':
+            for poly in full_poly.geoms:
+                print(f'poly: {poly}')
+            self.save_cutline(full_poly)
             raise Exception(f'expected full_poly to be a Polygon, got {full_poly.geom_type}')
         full_poly_points = list(full_poly.exterior.coords)
         full_poly_points.reverse()

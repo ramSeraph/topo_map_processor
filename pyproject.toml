@@ -7,11 +7,20 @@ requires-python = ">=3.12"
 dependencies = [
     "easyocr>=1.7.2",
     "imgcat>=0.6.0",
+    "mercantile>=1.2.1",
     "numpy>=2.3.1",
     "opencv-python-headless>=4.11.0.86",
     "pillow>=11.3.0",
+    "pmtiles>=3.4.1",
     "pyproj>=3.7.1",
     "pytesseract>=0.3.13",
     "rasterio>=1.4.3",
     "shapely>=2.1.1",
 ]
+
+[project.scripts]
+collect-bounds = "topo_map_processor.tools.collect_bounds:cli"
+update-bounds = "topo_map_processor.tools.update_bounds:cli"
+partition = "topo_map_processor.tools.partition:cli"
+retile = "topo_map_processor.tools.retile:cli"
+tile = "topo_map_processor.tools.tile:cli"
