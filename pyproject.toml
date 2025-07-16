@@ -2,8 +2,12 @@
 name = "topo_map_processor"
 version = "0.1.0"
 description = "Library for processing topographic maps"
+license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [
+    { name = "Sreeram Kandimalla", email = "kandimalla.sreeram@gmail.com" },
+]
 dependencies = [
     "easyocr>=1.7.2",
     "imgcat>=0.6.0",
@@ -17,6 +21,14 @@ dependencies = [
     "rasterio>=1.4.3",
     "shapely>=2.1.1",
 ]
+dynamic = [
+    "version"
+]
+
+[project.urls]
+homepage = "https://github.com/ramSeraph/topo_map_processor"
+repository = "https://github.com/ramSeraph/topo_map_processor.git"
+
 
 [project.scripts]
 collect-bounds = "topo_map_processor.tools.collect_bounds:cli"
@@ -24,3 +36,21 @@ update-bounds = "topo_map_processor.tools.update_bounds:cli"
 partition = "topo_map_processor.tools.partition:cli"
 retile = "topo_map_processor.tools.retile:cli"
 tile = "topo_map_processor.tools.tile:cli"
+
+
+[build-system]
+requires = [
+    "hatchling",
+    "hatch-vcs"
+]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "topo_map_processor/_version.py"
+
+tool.hatch.build.targets.sdist.include = [
+    "topo_map_processor"
+]
