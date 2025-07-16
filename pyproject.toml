@@ -1,6 +1,5 @@
 [project]
 name = "topo_map_processor"
-version = "0.1.0"
 description = "Library for processing topographic maps"
 license = {file = "LICENSE"}
 readme = "README.md"
