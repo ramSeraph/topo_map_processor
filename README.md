@@ -49,7 +49,7 @@ uv pip install -e .
 
 ## Usage
 
-This project can be used as a library but also provides as a set of command-line tools to help with managing the datasets, tiling and creating `pmtiles` files.
+This project can be used as a library but also provides a set of command-line tools to help with managing the datasets, tiling and creating `pmtiles` files.
 
 ### Library Workflow
 
@@ -114,9 +114,9 @@ def process_files():
         processor.process()
 ```
 
-The library is configurable and most parameters can be overriden at a per sheet level using the `extra` dictionary.
+The library is configurable and most parameters can be overridden at a per sheet level using the `extra` dictionary.
 
-The `index_map` is used to map specific file names to their corresponding metadata, which can be useful for processing specific datasets. In particular the index_map is expected to contain the geojson geometry of the map sheet in the `geometry` key, which is used to create the bounds file and georeference the sheet. The geometry is expected to be in counter clockwise order startiung at the top left corner of the map sheet.
+The `index_map` is used to map specific file names to their corresponding metadata, which can be useful for processing specific datasets. In particular the index_map is expected to contain the geojson geometry of the map sheet in the `geometry` key, which is used to create the bounds file and georeference the sheet. The geometry is expected to be in counter clockwise order starting at the top left corner of the map sheet.
 
 The end result is a Cloud optimized GeoTIFF file, a bounds file in GeoJSON format from which the tiles can be generated, using the `tile` command-line tool, and a set of tiles in the specified directory.
 
@@ -240,7 +240,7 @@ uvx --from topo_map_processor collect-bounds --bounds-dir /path/to/bounds --outp
 
 # tile and retile have a dependency gdal python library,
 # and some special handling is required so as to install a version of gdal python bindings which matches the version of gdal installed in your system
-# Also numpy and pillow depencies are required so that the gdal python bindings have some of the resampling features enabled
+# Also numpy and pillow dependencies are required so that the gdal python bindings have some of the resampling features enabled
 # Example: Get help for the 'tile' command
 GDAL_VERSION=$(gdalinfo --version | cut -d"," -f1 | cut -d" " -f2)
 uvx --with numpy --with pillow --with gdal==$GDAL_VERSION --from topo_map_processor tile --help
@@ -252,4 +252,4 @@ Contributions are welcome! Please feel free to submit a pull request.
 
 ## License
 
-This project is under UNLICENSE
+This project is under the UNLICENSE
