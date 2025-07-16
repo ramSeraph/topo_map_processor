@@ -1,4 +1,5 @@
-# Topo Map Processor
+# Topo Map Processor [![PyPI - Latest Version](https://img.shields.io/pypi/v/topo_map_processor)](https://pypi.org/project/topo_map_processor/) [![GitHub Tag](https://img.shields.io/github/v/tag/ramSeraph/topo_map_processor?filter=v*)](https://github.com/ramSeraph/topo_map_processor/releases/latest)
+
 
 A Python utility for processing topographic maps.
 
