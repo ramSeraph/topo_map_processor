@@ -166,11 +166,12 @@ This project provides several command-line tools to work with topographic maps. 
 Collects individual GeoJSONL bound files into a single GeoJSON FeatureCollection.
 
 ```bash
-collect-bounds --bounds-dir <directory> --output-file <file>
+collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file <file>]
 ```
 
 -   `--bounds-dir`: Directory containing GeoJSONL files. (Required)
 -   `--output-file`: Output GeoJSON file path. (Required)
+-   `--preexisting-file`: Pre existing GeoJSON file path. (Optional)
 
 #### `partition`
 
@@ -220,18 +221,6 @@ tile <tiles-dir> <tiffs-dir> <max-zoom> [<min-zoom>]
 -   `<tiffs-dir>`: Directory containing the input GeoTIFF files. (Required)
 -   `<max-zoom>`: Maximum zoom level for tiling. (Required)
 -   `<min-zoom>`: Minimum zoom level for tiling (default: 0).
-
-#### `update-bounds`
-
-Updates a main GeoJSON bounds file with new or modified bounds from individual `.geojsonl` files.
-
-```bash
-update-bounds --bounds-file <file> --bounds-dir <dir> --retile-list-file <file>
-```
-
--   `--bounds-file`: The main GeoJSON bounds file to update. (Required)
--   `--bounds-dir`: Directory containing the new or updated individual `.geojsonl` files. (Required)
--   `--retile-list-file`: A file containing the list of sheet names that have been updated (corresponding to the files in `--bounds-dir`). (Required)
 
 ### Running Tools Directly with `uvx`
 
