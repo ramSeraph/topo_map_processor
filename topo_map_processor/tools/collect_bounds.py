@@ -1,13 +1,15 @@
 
-import sys
-from pathlib import Path
+import argparse
 
 def cli():
-    bounds_dir = Path(sys.argv[1])
-    output_file = Path(sys.argv[2])
+    parser = argparse.ArgumentParser(description='Collect GeoJSONL files into a single GeoJSON file.')
+    parser.add_argument('--bounds-dir', required=True, help='Directory containing GeoJSONL files')
+    parser.add_argument('--output-file', required=True, help='Output GeoJSON file path')
 
-    paths = list(bounds_dir.glob('*.geojsonl'))
-    with open(output_file, 'w') as f:
+    args = parser.parse_args()
+
+    paths = list(args.bounds_dir.glob('*.geojsonl'))
+    with open(args.output_file, 'w') as f:
         f.write('{ "type": "FeatureCollection", "features": [\n')
         for i,p in enumerate(paths):
             line = p.read_text().strip('\n')

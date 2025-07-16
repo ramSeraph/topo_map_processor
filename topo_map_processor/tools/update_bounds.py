@@ -5,9 +5,9 @@ from pathlib import Path
 
 def cli():
     parser = argparse.ArgumentParser(description="Update bounds in a GeoJSON file.")
-    parser.add_argument("bounds-file", help="Input GeoJSON file with bounds.")
-    parser.add_argument("bounds-dir", help="Directory containing the individual bounds files")
-    parser.add_argument("retile-list-file", help="File containing the list of sheets to update.")
+    parser.add_argument("--bounds-file", required=True, help="Input GeoJSON file with bounds.")
+    parser.add_argument("--bounds-dir", required=True, help="Directory containing the individual bounds files")
+    parser.add_argument("--retile-list-file", required=True, help="File containing the list of sheets to update.. .tif extension is expected")
 
     args = parser.parse_args()
 
@@ -29,6 +29,7 @@ def cli():
     sheets = retile_list_file.read_text().strip().splitlines()
     sheets = [s.strip() for s in sheets if s.strip()]
     for s in sheets:
+        s = s.replace('.tif', '')
         bfile = bounds_dir / f'{s}.geojsonl'
         if not bfile.exists():
             raise FileNotFoundError(f"Bounds file for sheet '{s}' does not exist: {bfile}")

@@ -315,17 +315,17 @@ def create_pmtiles(partition_info, reader, to_pmtiles_prefix, name, description,
 
 def cli():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--only-disk', action='store_true')
-    parser.add_argument('--to-pmtiles-prefix', required=True)
-    parser.add_argument('--from-pmtiles-prefix')
-    parser.add_argument('--from-tiles-dir', required=True)
-    parser.add_argument('--name', required=True)
-    parser.add_argument('--description', required=True)
-    parser.add_argument('--min-zoom', default=0, type=int)
-    parser.add_argument('--max-zoom', required=True, type=int)
+    parser.add_argument('--only-disk', action='store_true', help='Only read tiles from disk.')
+    parser.add_argument('--to-pmtiles-prefix', required=True, help='Prefix for the output PMTiles files.')
+    parser.add_argument('--from-pmtiles-prefix', help='Prefix for the input PMTiles files. Required if not using --only-disk.')
+    parser.add_argument('--from-tiles-dir', required=True, help='Directory containing the input tiles')
+    parser.add_argument('--name', required=True, help='Name of the mosaic.')
+    parser.add_argument('--description', required=True, help='Description of the mosaic.')
+    parser.add_argument('--min-zoom', default=0, type=int, help='Minimum zoom level for the mosaic.')
+    parser.add_argument('--max-zoom', required=True, type=int, help='Maximum zoom level for the mosaic.')
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--attribution')
-    group.add_argument('--attribution-file')
+    group.add_argument('--attribution', help='Attribution text for the mosaic.')
+    group.add_argument('--attribution-file', help='File containing attribution text for the mosaic.')
     args = parser.parse_args()
 
     if args.attribution_file:

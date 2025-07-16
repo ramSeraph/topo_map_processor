@@ -217,19 +217,23 @@ def cli():
     parser = argparse.ArgumentParser()
     parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
     parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
-    parser.add_argument('--min-zoom', default=0, type=int)
-    parser.add_argument('--max-zoom', required=True, type=int)
+    parser.add_argument('--min-zoom', default=0, type=int, help='Minimum zoom level to create tiles for')
+    parser.add_argument('--max-zoom', required=True, type=int, help='Maximum zoom level to create tiles for')
     parser.add_argument('--sheets-to-pull-list-outfile', default=None,
-                        help='Output into which we write the list of sheet that need to be pulled, if set the script ends after created the list file')
-    parser.add_argument('--from-pmtiles-prefix')
-    parser.add_argument('--tiles-dir', required=True)
-    parser.add_argument('--tiffs-dir', required=True)
+                        help='Output into which we write the list of sheet that need to be pulled, if set, the script ends after it created the list file')
+    parser.add_argument('--from-pmtiles-prefix', help='Prefix to the PMTiles source from which we pull tiles, if needs to be set when --sheets-to-pull-list-outfile is not set')
+    parser.add_argument('--tiles-dir', help='Directory where the tiles will be created')
+    parser.add_argument('--tiffs-dir', help='Directory where the tiffs are present')
 
     args = parser.parse_args()
     if not args.sheets_to_pull_list_outfile:
         missing = []
         if not args.from_pmtiles_prefix:
             missing.append('--from-pmtiles-prefix')
+        if not args.tiles_dir:
+            missing.append('--tiles-dir')
+        if not args.tiffs_dir:
+            missing.append('--tiffs-dir')
         
         if missing:
             parser.error(f"The following arguments are required when --sheets-to-pull-list-outfile is not provided: {', '.join(missing)}")
@@ -255,12 +259,14 @@ def cli():
         for sheet in to_add:
             sheets_to_pull.add(sheet)
 
-    Path(args.tiffs_dir).mkdir(exist_ok=True, parents=True)
-    Path(args.tiles_dir).mkdir(exist_ok=True, parents=True)
     print(f'{sheets_to_pull=}')
+        
     if args.sheets_to_pull_list_outfile is not None:
+        if args.tiffs_dir is not None:
+            Path(args.tiffs_dir).mkdir(exist_ok=True, parents=True)
         Path(args.sheets_to_pull_list_outfile).write_text('\n'.join(sheets_to_pull) + '\n')
         exit(0)
+
 
 
     print('check the sheets availability')
@@ -268,6 +274,8 @@ def cli():
 
     print('creating vrt file from sheets involved')
     vrt_file = create_vrt_file(sheets_to_pull, args.tiffs_dir)
+
+    Path(args.tiles_dir).mkdir(exist_ok=True, parents=True)
 
     print('creating tiles for base zoom with a vrt')
     create_base_tiles(f'{vrt_file}', str(args.tiles_dir), f'{args.max_zoom}')
