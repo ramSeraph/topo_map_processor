@@ -3,6 +3,7 @@
 # dependencies = [
 #     "mercantile",
 #     "pmtiles",
+#     "shapely",
 # ]
 # ///
 
@@ -18,17 +19,14 @@ from pathlib import Path
 
 
 import mercantile
-from shapely.geometry import mapping
+from shapely.geometry import shape
 
 from osgeo_utils.gdal2tiles import main as gdal2tiles_main
 from osgeo_utils.gdal2tiles import create_overview_tile, TileJobInfo, GDAL2Tiles
 
-
 from tile_sources import PartitionedPMTilesSource, MissingTileError
 
 WEBP_QUALITY = 75
-
-
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
@@ -110,7 +108,7 @@ def get_tile_file(tile, tiles_dir):
 
 def check_sheets(sheets_to_pull, tiffs_dir):
     for sheet_no in sheets_to_pull:
-        to = tiffs_dir.joinpath(f'{sheet_no}.tif')
+        to = tiffs_dir.joinpath(f'{sheet_no}')
         if not to.exists():
             raise Exception(f'missing file {to}')
 
@@ -122,7 +120,7 @@ def copy_tiles_over(tiles_to_pull, tiles_dir, from_pmtiles_prefix):
         pull_from_pmtiles(to, from_pmtiles_prefix)
 
 
-def create_upper_tiles(tiles_to_create, tiles_dir):
+def create_upper_tiles(z, tiles_to_create, tiles_dir):
     options = AttrDict({
         'resume': True,
         'verbose': False,
@@ -162,7 +160,7 @@ def get_sheet_data(bounds_fname):
     sheets_to_box = {}
     for f in index_data['features']:
         sheet_no = f['properties']['id']
-        geom = mapping(f['geometry'])
+        geom = shape(f['geometry'])
         xmin, ymin, xmax, ymax = geom.bounds
         box = mercantile.LngLatBbox(xmin, ymin, xmax, ymax)
         sheets_to_box[sheet_no] = box
@@ -203,7 +201,7 @@ def create_vrt_file(sheets, tiffs_dir):
     vrt_file = Path(f'{tiffs_dir}/combined.vrt')
     if vrt_file.exists():
         return vrt_file
-    tiff_list = [ tiffs_dir.joinpath(f'{p_sheet}.tif').resolve() for p_sheet in sheets ]
+    tiff_list = [ tiffs_dir.joinpath(f'{p_sheet}').resolve() for p_sheet in sheets ]
     tiff_list = [ str(f) for f in tiff_list if f.exists() ]
 
     tiff_list_str = ' '.join(tiff_list)
@@ -239,7 +237,7 @@ def cli():
             parser.error(f"The following arguments are required when --sheets-to-pull-list-outfile is not provided: {', '.join(missing)}")
 
     retile_sheets = Path(args.retile_list_file).read_text().split('\n')
-    retile_sheets = set([ r.strip() for r in retile_sheets if r.strip() != '' ])
+    retile_sheets = set([ r.strip().replace('.tif', '') for r in retile_sheets if r.strip() != '' ])
 
     if args.from_pmtiles_prefix is None:
         if not args.max_zoom:
@@ -271,7 +269,7 @@ def cli():
     for tile in affected_base_tiles:
         to_add = base_tiles_to_sheets[tile]
         for sheet in to_add:
-            sheets_to_pull.add(sheet)
+            sheets_to_pull.add(sheet + '.tif')
 
     print(f'{sheets_to_pull=}')
         
@@ -282,20 +280,22 @@ def cli():
         exit(0)
 
 
+    tiles_dir = Path(args.tiles_dir)
+    tiffs_dir = Path(args.tiffs_dir)
 
     print('check the sheets availability')
-    check_sheets(sheets_to_pull, args.tiffs_dir)
+    check_sheets(sheets_to_pull, tiffs_dir)
 
     print('creating vrt file from sheets involved')
-    vrt_file = create_vrt_file(sheets_to_pull, args.tiffs_dir)
+    vrt_file = create_vrt_file(sheets_to_pull, tiffs_dir)
 
     Path(args.tiles_dir).mkdir(exist_ok=True, parents=True)
 
     print('creating tiles for base zoom with a vrt')
-    create_base_tiles(f'{vrt_file}', str(args.tiles_dir), f'{max_zoom}')
+    create_base_tiles(str(vrt_file), tiles_dir, f'{max_zoom}')
 
     print('deleting unwanted base tiles')
-    delete_unwanted_tiles(affected_base_tiles, max_zoom, args.tiles_dir)
+    delete_unwanted_tiles(affected_base_tiles, max_zoom, tiles_dir)
 
     prev_affected_tiles = affected_base_tiles
     for z in range(max_zoom-1, min_zoom-1, -1):
@@ -313,13 +313,13 @@ def cli():
                     child_tiles_to_pull.add(ctile)
 
         print('copying additional child tiles required for curr level')
-        copy_tiles_over(child_tiles_to_pull, args.tiles_dir, args.from_pmtiles_prefix)
+        copy_tiles_over(child_tiles_to_pull, tiles_dir, args.from_pmtiles_prefix)
 
         print('creating tiles for current level')
-        create_upper_tiles(curr_affected_tiles, args.tiles_dir)
+        create_upper_tiles(z, curr_affected_tiles, tiles_dir)
 
         print('removing unwanted child tiles')
-        delete_unwanted_tiles(prev_affected_tiles, z+1, args.tiles_dir)
+        delete_unwanted_tiles(prev_affected_tiles, z+1, tiles_dir)
 
         prev_affected_tiles = curr_affected_tiles
 

@@ -35,10 +35,11 @@ def cli():
     with open(args.output_file, 'w') as f:
         f.write('{ "type": "FeatureCollection", "features": [\n')
 
-        for i,feat in enumerate(feat_map.values()):
+        feats = list(feat_map.values())
+        for i,feat in enumerate(feats):
             line = json.dumps(feat)
 
-            if i != len(paths) - 1:
+            if i != len(feats) - 1:
                 line += ','
             line += '\n'
             f.write(line)

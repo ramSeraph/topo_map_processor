@@ -108,7 +108,7 @@ class PartitionedPMTilesSource:
 
         self.fnames = list(pmtiles_files)
         fname_to_index = { fname:i for i,fname in enumerate(self.fnames) }
-        self.tiles_to_suffix = {}
+        self.tiles_to_findex = {}
         self.tiles_to_size = {}
         for fname in self.fnames:
             print(f'collecting tile sizes from {fname}')
@@ -119,7 +119,7 @@ class PartitionedPMTilesSource:
                 self.tiles_to_size[tile] = len(t_data)
 
     def get_reader_from_tile(self, tile):
-        if tile not in self.tiles_to_suffix:
+        if tile not in self.tiles_to_findex:
             raise MissingTileError()
         s = self.tiles_to_findex[tile]
         fname = self.fnames[s]
@@ -161,7 +161,7 @@ class PartitionedPMTilesSource:
 
     @property
     def max_zoom(self):
-        return max(int([reader.header()['max_zoom']) for reader in self.readers.values()])
+        return max([int(reader.header()['max_zoom']) for reader in self.readers.values()])
 
     def get_meta_prop(self, prop_name):
         for reader in self.readers.values():
