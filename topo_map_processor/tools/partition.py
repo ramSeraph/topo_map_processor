@@ -319,11 +319,11 @@ def cli():
     parser.add_argument('--to-pmtiles-prefix', required=True, help='Prefix for the output PMTiles files.')
     parser.add_argument('--from-pmtiles-prefix', help='Prefix for the input PMTiles files. Required if not using --only-disk.')
     parser.add_argument('--from-tiles-dir', required=True, help='Directory containing the input tiles')
-    parser.add_argument('--name', required=True, help='Name of the mosaic.')
-    parser.add_argument('--description', required=True, help='Description of the mosaic.')
+    parser.add_argument('--name', required=False, help='Name of the mosaic.')
+    parser.add_argument('--description', required=False, help='Description of the mosaic.')
     parser.add_argument('--min-zoom', default=0, type=int, help='Minimum zoom level for the mosaic.')
-    parser.add_argument('--max-zoom', required=True, type=int, help='Maximum zoom level for the mosaic.')
-    group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument('--max-zoom', required=False, type=int, help='Maximum zoom level for the mosaic.')
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument('--attribution', help='Attribution text for the mosaic.')
     group.add_argument('--attribution-file', help='File containing attribution text for the mosaic.')
     args = parser.parse_args()
@@ -337,19 +337,52 @@ def cli():
     if not args.only_disk and not args.from_pmtiles_prefix:
         parser.error("--from-pmtiles-prefix is required unless --only-disk is set.")
 
+    if args.only_disk:
+        missing_args = []
+        if args.name is None:
+            missing_args.append('--name')
+        if args.description is None:
+            missing_args.append('--description')
+        if attribution_text is None:
+            missing_args.append('--attribution or --attribution-file')
+        if missing_args:
+            parser.error(f'Missing required arguments for --only-disk: {", ".join(missing_args)}')
 
     if args.only_disk:
         reader = DiskSource(args.from_tiles_dir)
     else:
         reader = DiskAndPartitionedPMTilesSource(args.from_tiles_dir, args.from_pmtiles_prefix)
 
+    if args.max_zoom is None:
+        max_zoom = reader.max_zoom
+    else:
+        max_zoom = args.max_zoom
+
+    if args.min_zoom is None:
+        min_zoom = reader.min_zoom
+    else:
+        min_zoom = args.min_zoom
+
+    if args.only_disk:
+        name = args.name
+    else:
+        name = args.name or reader.name
+
+    if args.only_disk:
+        description = args.description
+    else:
+        description = args.description or reader.description
+
+    if not args.only_disk:
+        attribution_text = attribution_text or reader.attribution
+
     print('getting partition info')
     to_partition_file = Path(f'{args.to_pmtiles_prefix}.partition_info.json')
-    partition_info = get_partition_info(reader, args.min_zoom, args.max_zoom, to_partition_file)
+    partition_info = get_partition_info(reader, min_zoom, max_zoom, to_partition_file)
 
     print('creating pmtiles')
     mosaic_data = create_pmtiles(partition_info, reader, args.to_pmtiles_prefix,
-                                 args.name, args.description, attribution_text)
+                                 name, description, attribution_text)
     pprint(mosaic_data)
     if len(mosaic_data) > 1:
         Path(f'{args.to_pmtiles_prefix}.mosaic.json').write_text(json.dumps(mosaic_data))

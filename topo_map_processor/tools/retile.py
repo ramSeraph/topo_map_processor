@@ -217,8 +217,8 @@ def cli():
     parser = argparse.ArgumentParser()
     parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
     parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
-    parser.add_argument('--min-zoom', default=0, type=int, help='Minimum zoom level to create tiles for')
-    parser.add_argument('--max-zoom', required=True, type=int, help='Maximum zoom level to create tiles for')
+    parser.add_argument('--min-zoom', type=int, help='Minimum zoom level to create tiles for')
+    parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for')
     parser.add_argument('--sheets-to-pull-list-outfile', default=None,
                         help='Output into which we write the list of sheet that need to be pulled, if set, the script ends after it created the list file')
     parser.add_argument('--from-pmtiles-prefix', help='Prefix to the PMTiles source from which we pull tiles, if needs to be set when --sheets-to-pull-list-outfile is not set')
@@ -241,9 +241,23 @@ def cli():
     retile_sheets = Path(args.retile_list_file).read_text().split('\n')
     retile_sheets = set([ r.strip() for r in retile_sheets if r.strip() != '' ])
 
+    if args.from_pmtiles_prefix is None:
+        if not args.max_zoom:
+            parser.error('--max-zoom is required when --from-pmtiles-prefix is not set')
+        max_zoom = args.max_zoom
+
+        if not args.min_zoom:
+            parser.error('--min-zoom is required when --from-pmtiles-prefix is not set')
+        min_zoom = args.min_zoom
+    else:
+        reader = get_pmtiles_reader(args.from_pmtiles_prefix)
+        max_zoom = reader.max_zoom
+        min_zoom = reader.min_zoom
+
+
     print('getting base tiles to sheet mapping')
     sheets_to_box = get_sheet_data(args.bounds_file)
-    sheets_to_base_tiles, base_tiles_to_sheets = get_base_tile_sheet_mappings(sheets_to_box, args.max_zoom)
+    sheets_to_base_tiles, base_tiles_to_sheets = get_base_tile_sheet_mappings(sheets_to_box, max_zoom)
 
     all_affected_tiles = set()
 
@@ -278,13 +292,13 @@ def cli():
     Path(args.tiles_dir).mkdir(exist_ok=True, parents=True)
 
     print('creating tiles for base zoom with a vrt')
-    create_base_tiles(f'{vrt_file}', str(args.tiles_dir), f'{args.max_zoom}')
+    create_base_tiles(f'{vrt_file}', str(args.tiles_dir), f'{max_zoom}')
 
     print('deleting unwanted base tiles')
-    delete_unwanted_tiles(affected_base_tiles, args.max_zoom, args.tiles_dir)
+    delete_unwanted_tiles(affected_base_tiles, max_zoom, args.tiles_dir)
 
     prev_affected_tiles = affected_base_tiles
-    for z in range(args.max_zoom-1, args.min_zoom-1, -1):
+    for z in range(max_zoom-1, min_zoom-1, -1):
         print(f'handling level {z}')
 
         curr_affected_tiles = set()

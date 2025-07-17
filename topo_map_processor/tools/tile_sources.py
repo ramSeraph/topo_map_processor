@@ -1,6 +1,4 @@
-import os
 import glob
-import json
 
 from pathlib import Path
 
@@ -14,52 +12,87 @@ class MissingTileError(Exception):
 
 class DiskSource:
     def __init__(self, directory):
-        self.dir = directory
+        self.dir = Path(directory)
 
-    def get_tile_from_file(self, fname):
-        parts = fname.split('/')
+    def get_tile_from_file(self, file):
+        parts = file.parts
         tile = mercantile.Tile(z=int(parts[-3]),
                                x=int(parts[-2]),
                                y=int(parts[-1].replace('.webp', '')))
         return tile
 
     def file_from_tile(self, tile):
-        return f'{self.dir}/{tile.z}/{tile.x}/{tile.y}.webp'
+        return self.dir / f'{tile.z}' / f'{tile.x}' / f'{tile.y}.webp'
 
     def get_tile_data(self, tile):
-        fname = self.file_from_tile(tile)
-        try:
-            os.stat(fname)
-        except FileNotFoundError:
+        file = self.file_from_tile(tile)
+        if not file.exists():
             raise MissingTileError()
 
-        with open(fname, 'rb') as f:
-            return f.read()
+        return file.read_bytes()
 
     def get_tile_size(self, tile):
-        fname = self.file_from_tile(tile)
-        try:
-            fstats = os.stat(fname)
-        except FileNotFoundError:
+        file = self.file_from_tile(tile)
+        if not file.exists():
             raise MissingTileError()
-        return fstats.st_size
+
+        return file.stat().st_size
         
     def for_all_z(self, z):
-        fnames = glob.glob(f'{self.dir}/{z}/*/*.webp')
-        for fname in fnames:
-            tile = self.get_tile_from_file(fname)
-            fstats = os.stat(fname)
+        for file in self.dir.glob(f'{z}/*/*.webp'):
+            tile = self.get_tile_from_file(file)
+            fstats = file.stat()
             yield (tile, fstats.st_size)
 
     def all(self):
-        fnames = glob.glob(f'{self.dir}/*/*/*.webp')
-        for fname in fnames:
-            tile = self.get_tile_from_file(fname)
-            t_data = Path(fname).read_bytes()
+        for file in self.dir.glob('*/*/*.webp'):
+            tile = self.get_tile_from_file(file)
+            t_data = file.read_bytes()
             yield (tile, t_data)
 
     def cleanup(self):
         pass
+
+    def get_zomm_levels(self):
+        zoom_levels = []
+        for dir in self.dir.glob('*'):
+            if not dir.is_dir():
+                continue
+
+            try:
+                zoom = int(dir.name)
+            except ValueError:
+                continue
+            zoom_levels.append(zoom)
+        return zoom_levels
+
+    @property
+    def min_zoom(self):
+        zoom_levels = self.get_zomm_levels()
+        if len(zoom_levels) == 0:
+            raise ValueError("No zoom directories found in the disk source.")
+
+        return min(zoom_levels)
+
+    @property
+    def max_zoom(self):
+        zoom_levels = self.get_zomm_levels()
+        if len(zoom_levels) == 0:
+            raise ValueError("No zoom directories found in the disk source.")
+
+        return max(zoom_levels)
+
+    @property
+    def name(self):
+        raise ValueError("DiskSource does not have a name property.")
+        
+    @property
+    def description(self):
+        raise ValueError("DiskSource does not have a description property.")
+
+    @property
+    def attribution(self):
+        raise ValueError("DiskSource does not have a attribution property.")
         
 class PartitionedPMTilesSource:
     def __init__(self, pmtiles_prefix):
@@ -69,7 +102,7 @@ class PartitionedPMTilesSource:
         for fname in pmtiles_files:
             file = open(fname, 'rb')
             self.files.append(file)
-            src = MmapSource(open(fname, 'rb'))
+            src = MmapSource(file)
             reader = PMTilesReader(src)
             self.readers[fname] = reader
 
@@ -122,6 +155,34 @@ class PartitionedPMTilesSource:
         for f in self.files:
             f.close()
 
+    @property
+    def min_zoom(self):
+        return min([int(reader.header()['min_zoom']) for reader in self.readers.values()])
+
+    @property
+    def max_zoom(self):
+        return max(int([reader.header()['max_zoom']) for reader in self.readers.values()])
+
+    def get_meta_prop(self, prop_name):
+        for reader in self.readers.values():
+            metadata = reader.metadata()
+            if prop_name in metadata:
+                return metadata[prop_name]
+        raise ValueError(f"Source does not have a {prop_name} property.")
+
+    @property
+    def name(self):
+        return self.get_meta_prop('name')
+        
+    @property
+    def description(self):
+        return self.get_meta_prop('description')
+
+    @property
+    def attribution(self):
+        return self.get_meta_prop('attribution')
+        
+
  
 
 class DiskAndPartitionedPMTilesSource:
@@ -166,5 +227,60 @@ class DiskAndPartitionedPMTilesSource:
     def cleanup(self):
         self.dsrc.cleanup()
         self.psrc.cleanup()
+
+    @property
+    def min_zoom(self):
+        min_zooms = []
+
+        try:
+            min_disk_zoom = self.dsrc.min_zoom
+            min_zooms.append(min_disk_zoom)
+        except ValueError:
+            pass
+
+        try:
+            min_pmtiles_zoom = self.psrc.min_zoom
+            min_zooms.append(min_pmtiles_zoom)
+        except ValueError:
+            pass
+
+        if len(min_zooms) == 0:
+            raise ValueError("No zoom directories found in the disk source or PMTiles source.")
+
+        return min(min_zooms)
+
+    @property
+    def max_zoom(self):
+        max_zooms = []
+
+        try:
+            max_disk_zoom = self.dsrc.max_zoom
+            max_zooms.append(max_disk_zoom)
+        except ValueError:
+            pass
+
+        try:
+            max_pmtiles_zoom = self.psrc.max_zoom
+            max_zooms.append(max_pmtiles_zoom)
+        except ValueError:
+            pass
+
+        if len(max_zooms) == 0:
+            raise ValueError("No zoom directories found in the disk source or PMTiles source.")
+
+        return max(max_zooms)
+
+    @property
+    def name(self):
+        return self.psrc.name
+        
+    @property
+    def description(self):
+        return self.psrc.description
+
+    @property
+    def attribution(self):
+        return self.psrc.attribution
+        
 
 

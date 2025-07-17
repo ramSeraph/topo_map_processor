@@ -175,38 +175,42 @@ collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file
 
 #### `partition`
 
-Partitions a large set of tiles into smaller PMTiles files. This is useful for managing large datasets, for example, to stay within file size limits for services like GitHub Releases.
+Partitions a large set of tiles into smaller PMTiles files. This is useful for managing large datasets, for example, to stay within file size limits for services like GitHub Releases. When run with `--only-disk`, it creates a new partitioned `pmtiles` fileset from a directory of tiles. When run without, it can be used to re-partition an existing `pmtiles` fileset, for example after having retiled some of the sheets.
 
 ```bash
-partition --to-pmtiles-prefix <prefix> --from-tiles-dir <dir> --name <name> --description <desc> --max-zoom <zoom> [--min-zoom <zoom>] [--from-pmtiles-prefix <prefix>] [--only-disk] (--attribution <text> | --attribution-file <file>)
+partition --to-pmtiles-prefix <prefix> --from-tiles-dir <dir> [--from-pmtiles-prefix <prefix>] [--name <name>] [--description <desc>] [--max-zoom <zoom>] [--min-zoom <zoom>] [--only-disk] (--attribution <text> | --attribution-file <file>)
 ```
 
 -   `--to-pmtiles-prefix`: Prefix for the output PMTiles files. (Required)
 -   `--from-tiles-dir`: Directory containing the input tiles. (Required)
--   `--name`: Name of the mosaic. (Required)
--   `--description`: Description of the mosaic. (Required)
--   `--max-zoom`: Maximum zoom level for the mosaic. (Required)
--   `--min-zoom`: Minimum zoom level for the mosaic (default: 0).
 -   `--from-pmtiles-prefix`: Prefix for input PMTiles files (required if not using `--only-disk`).
+-   `--name`: Name of the mosaic. (Required if using `--only-disk`)
+-   `--description`: Description of the mosaic. (Required if using `--only-disk`)
+-   `--max-zoom`: Maximum zoom level for the mosaic. (Defaults to the max zoom found in the source)
+-   `--min-zoom`: Minimum zoom level for the mosaic (default: 0).
 -   `--only-disk`: Only read tiles from the local disk.
--   `--attribution`: Attribution text for the mosaic. (Required, unless `--attribution-file` is used)
--   `--attribution-file`: File containing attribution text. (Required, unless `--attribution` is used)
+-   `--attribution`: Attribution text for the mosaic. (Required if using `--only-disk`)
+-   `--attribution-file`: File containing attribution text. (Required if using `--only-disk`)
 
 #### `retile`
 
 Retiles a specific list of sheets (GeoTIFFs) and updates the corresponding tiles in an existing tile set. It can determine which other sheets are affected and need to be pulled in to correctly retile the area.
 
+The tool works in two stages. First, it calculates the full set of sheets that need to be processed (the "pull list"), which includes the sheets from the input list plus any adjacent sheets that share tiles. You can run the tool with `--sheets-to-pull-list-outfile` to generate this list and then exit. This is useful for fetching the required GeoTIFFs before proceeding.
+
+In the second stage, it retiles the affected area. It uses the pull list to create a temporary virtual raster (`.vrt`), generates new base tiles for the affected region, and then reconstructs the upper-level tiles by pulling existing, unaffected tiles from the PMTiles source.
+
 ```bash
-retile --retile-list-file <file> --bounds-file <file> --max-zoom <zoom> [--min-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-pmtiles-prefix <prefix>] [--sheets-to-pull-list-outfile <file>]
+retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--min-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-pmtiles-prefix <prefix>] [--sheets-to-pull-list-outfile <file>]
 ```
 
 -   `--retile-list-file`: File containing the list of sheets to retile. (Required)
 -   `--bounds-file`: GeoJSON file containing the list of available sheets and their geographic bounds. (Required)
--   `--max-zoom`: Maximum zoom level to create tiles for. (Required)
--   `--min-zoom`: Minimum zoom level to create tiles for (default: 0).
--   `--tiffs-dir`: Directory where the GeoTIFFs are located.
--   `--tiles-dir`: Directory where the tiles will be created.
--   `--from-pmtiles-prefix`: Prefix for the PMTiles source from which to pull existing tiles.
+-   `--max-zoom`: Maximum zoom level to create tiles for. (Defaults to the max zoom from the PMTiles source)
+-   `--min-zoom`: Minimum zoom level to create tiles for. (Defaults to the min zoom from the PMTiles source)
+-   `--tiffs-dir`: Directory where the GeoTIFFs are located. (Required if not in pull-list generation mode)
+-   `--tiles-dir`: Directory where the tiles will be created. (Required if not in pull-list generation mode)
+-   `--from-pmtiles-prefix`: Prefix for the PMTiles source from which to pull existing tiles. (Required if not in pull-list generation mode)
 -   `--sheets-to-pull-list-outfile`: If provided, the script will only calculate the full list of sheets that need to be processed (including adjacent ones) and write it to this file, then exit.
 
 #### `tile`
