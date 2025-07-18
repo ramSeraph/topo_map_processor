@@ -5,7 +5,7 @@ A Python utility for processing topographic maps.
 
 ## Description
 
-This project provides a collection of command-line tools and a Python library to process, analyze, and manipulate topographic map data, specifically for creating web-mappable tiles from GeoTIFF files. The tools allow you to create tiles, partition large tile sets, and update existing tile sets efficiently.
+This project provides a collection of command-line tools and a Python library to process, georeference, and export topographic map data in raster form, specifically for creating web-mappable tiles from GeoTIFF files. The tools allow you to create tiles, partition large tile sets, and update existing tile sets efficiently.
 
 ## Installation
 
@@ -60,7 +60,7 @@ The main steps, executed by the `processor.process()` method, are as follows:
 1.  **Image Preparation (`rotate`):** To minimize computation, the processor first creates a smaller, shrunken version of the full-resolution map. On this small image, it locates the main contour of the map's frame (the border area). By calculating the angle of this contour's minimum bounding box, it determines the skew of the map. The full-resolution image is then rotated using this angle to make the frame perfectly horizontal, correcting for any tilt introduced during scanning.
 2.  **Corner Detection (`get_corners`):** Once the image is straightened, the processor uses the same map frame contour to identify the four corner regions. By narrowing the search to these smaller areas, it can apply more precise logic to find the exact pixel coordinates of the map's neatline corners. This is a critical step that often requires custom implementation in a subclass (`get_intersection_point`) to handle the specific visual features of the map's corners (e.g., crosses, specific colors, patterns).
 3.  **Grid Line Removal (`remove_grid_lines`):** If configured, the processor can detect and remove grid lines (graticules) from the map image. This is achieved by implementing the `locate_grid_lines` method. The removal helps create a cleaner final map by inpainting the areas where the lines were.
-4.  **Georeferencing (`georeference`):** Using the detected corner coordinates and the corresponding real-world geographic coordinates (provided via the `index_map`), the tool creates Ground Control Points (GCPs). It then uses `gdal_translate` to create an initial georeferenced GeoTIFF.
+4.  **Georeferencing (`georeference`):** Using the detected corner coordinates and the corresponding real-world geographic coordinates (provided via the `index_box`), the tool creates Ground Control Points (GCPs). It then uses `gdal_translate` to create an initial georeferenced GeoTIFF.
 5.  **Warping and Cutting (`warp`):** The georeferenced image is then warped into the standard `EPSG:3857` projection used by most web maps. During this step, it's also precisely cropped to the map's boundary (neatline) using a cutline derived from the corner points. The output is a clean, map-only image, correctly projected.
 6.  **Exporting (`export`):** The final warped image is converted into a Cloud-Optimized GeoTIFF (COG), which is highly efficient for web-based tiling. A corresponding bounds file (`.geojsonl`) is also created, defining the geographic extent of the map sheet.
 
@@ -70,15 +70,15 @@ The output of this library workflow—a directory of COG `.tif` files and a dire
 
 The `TopoMapProcessor` class provides a framework for processing individual map sheets. To use it, you need to create a subclass and implement the required methods.
 
-Here's an example of how to use the `TopoMapProcessor` class, based on the provided `parse_jica.py` script:
+Here's an example of how to use the `TopoMapProcessor` class.
 
 ```python
 from topo_map_processor import TopoMapProcessor, LineRemovalParams
 
 class SampleProcessor(TopoMapProcessor):
 
-    def __init__(self, filepath, extra, index_map):
-        super().__init__(filepath, extra, index_map)
+    def __init__(self, filepath, extra, index_box, index_props):
+        super().__init__(filepath, extra, index_box, index_props)
         # ... (additional initialization)
 
     def get_inter_dir(self):
@@ -109,14 +109,16 @@ def process_files():
     # ... (load image files and special cases)
     for filepath in image_files:
         extra = special_cases.get(filepath.name, {})
-        index_map = get_index_map_jica()
-        processor = SampleProcessor(filepath, extra, index_map)
+        index_box, index_props = get_index_data(filepath.name)  # This should return the corresponding index box and properties for the file
+        processor = SampleProcessor(filepath, extra, index_box, index_props)
         processor.process()
 ```
 
 The library is configurable and most parameters can be overridden at a per sheet level using the `extra` dictionary.
 
-The `index_map` is used to map specific file names to their corresponding metadata, which can be useful for processing specific datasets. In particular the index_map is expected to contain the geojson geometry of the map sheet in the `geometry` key, which is used to create the bounds file and georeference the sheet. The geometry is expected to be in counter clockwise order starting at the top left corner of the map sheet.
+The `index_box` is used to provide the coordinates of the corners of the sheet. This information is used to create the bounds file and georeference the sheet. This is expected to be a list of coordinates in counter clockwise order starting at the top left corner of the map sheet.
+
+The optional `index_properties` dictionary can contain additional metadata about the sheet, such as its name, description, and other properties which end up in the generated bounds files.
 
 The end result is a Cloud optimized GeoTIFF file, a bounds file in GeoJSON format from which the tiles can be generated, using the `tile` command-line tool, and a set of tiles in the specified directory.
 

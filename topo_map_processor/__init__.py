@@ -70,9 +70,10 @@ class GCPBasedTransformer:
 
 
 class TopoMapProcessor:
-    def __init__(self, filepath, extra, index_map):
+    def __init__(self, filepath, extra, index_box, index_properties={}):
         self.filepath = filepath
-        self.index_map = index_map
+        self.index_box = index_box
+        self.index_properties = index_properties
 
         self.SHOW_IMG = os.getenv('SHOW_IMG', '0') == '1'
         self.INSPECT = os.getenv('INSPECT', '0') == '1'
@@ -141,11 +142,8 @@ class TopoMapProcessor:
         ext = self.filepath.suffix
         return self.filepath.name.replace(ext, '')
 
-    def get_sheet_ibox(self, sheet_id=None):
-        if sheet_id is None:
-            sheet_id = self.get_id()
-
-        return self.index_map[sheet_id]
+    def get_sheet_ibox(self):
+        return self.index_box
 
     def get_data_dir(self):
         return Path('data')
@@ -1607,12 +1605,15 @@ class TopoMapProcessor:
     def get_cutline_props(self):
         crs_proj = self.get_crs_proj()
 
-        props = {
+        props = {}
+        props.update(self.index_properties)
+
+        props.update({
             'id': self.get_id(),
             'crs': crs_proj,
             'gcps': self.get_gcps(pre_rotated=True),
             'pixel_cutline': self.get_full_pixel_cutline(pre_rotated=True),
-        }
+        })
         return props
 
     def create_cutline(self, ibox, file):
