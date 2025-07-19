@@ -4,10 +4,40 @@ from pathlib import Path
 
 import mercantile
 
-from pmtiles.reader import MmapSource, Reader as PMTilesReader, all_tiles
+from pmtiles.reader import (
+    MmapSource, 
+    Reader as PMTilesReader, 
+    all_tiles,
+)
+
+from pmtiles.tile import (
+    deserialize_header,
+    deserialize_directory,
+    tileid_to_zxy,
+)
+
 
 class MissingTileError(Exception):
     pass
+
+def traverse_sizes(get_bytes, header, dir_offset, dir_length):
+    entries = deserialize_directory(get_bytes(dir_offset, dir_length))
+    for entry in entries:
+        if entry.run_length > 0:
+            for i in range(entry.run_length):
+                yield tileid_to_zxy(entry.tile_id + i), entry.length
+        else:
+            for t in traverse_sizes(
+                get_bytes,
+                header,
+                header["leaf_directory_offset"] + entry.offset,
+                entry.length,
+            ):
+                yield t
+
+def all_tile_sizes(get_bytes):
+    header = deserialize_header(get_bytes(0, 127))
+    return traverse_sizes(get_bytes, header, header["root_offset"], header["root_length"])
 
 
 class DiskSource:
@@ -107,16 +137,32 @@ class PartitionedPMTilesSource:
             self.readers[fname] = reader
 
         self.fnames = list(pmtiles_files)
+        self.mapping_filled = False
+        self._tiles_to_findex = {}
+        self._tiles_to_size = {}
+
+    def fill_mapping(self):
+        if self.mapping_filled:
+            return
+        self.mapping_filled = True
         fname_to_index = { fname:i for i,fname in enumerate(self.fnames) }
-        self.tiles_to_findex = {}
-        self.tiles_to_size = {}
         for fname in self.fnames:
             print(f'collecting tile sizes from {fname}')
             reader = self.readers[fname]
-            for t, t_data in all_tiles(reader.get_bytes):
+            for t, t_size in all_tile_sizes(reader.get_bytes):
                 tile = mercantile.Tile(x=t[1], y=t[2], z=t[0])
-                self.tiles_to_findex[tile] = fname_to_index[fname]
-                self.tiles_to_size[tile] = len(t_data)
+                self._tiles_to_findex[tile] = fname_to_index[fname]
+                self._tiles_to_size[tile] = t_size
+
+    @property
+    def tiles_to_findex(self):
+        self.fill_mapping()
+        return self._tiles_to_findex
+
+    @property
+    def tiles_to_size(self):
+        self.fill_mapping()
+        return self._tiles_to_size
 
     def get_reader_from_tile(self, tile):
         if tile not in self.tiles_to_findex:

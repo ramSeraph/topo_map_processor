@@ -9,6 +9,7 @@
 
 import os
 import re
+import sys
 import json
 import argparse
 
@@ -16,15 +17,22 @@ import time
 import subprocess
 
 from pathlib import Path
+from functools import partial
+from multiprocessing import cpu_count, Pool, set_start_method
 
 
 import mercantile
 from shapely.geometry import shape
 
-from osgeo_utils.gdal2tiles import main as gdal2tiles_main
-from osgeo_utils.gdal2tiles import create_overview_tile, TileJobInfo, GDAL2Tiles
+from osgeo_utils.gdal2tiles import (
+    submain as gdal2tiles_main,
+    create_overview_tile,
+    TileJobInfo, 
+    GDAL2Tiles, 
+    DividedCache,
+)
 
-from tile_sources import PartitionedPMTilesSource, MissingTileError
+from .tile_sources import PartitionedPMTilesSource, MissingTileError
 
 WEBP_QUALITY = 75
 
@@ -58,13 +66,8 @@ def convert_paths_in_vrt(vrt_file):
     vrt_file.write_text(replaced)
 
     
-def create_base_tiles(inp_file, output_dir, zoom_levels):
+def create_base_tiles(inp_file, output_dir, zoom_levels, pool):
     print('start tiling')
-    os.environ['GDAL_CACHEMAX'] = '2048'
-    os.environ['GDAL_MAX_DATASET_POOL_SIZE'] = '5000'
-    os.environ['GDAL_DISABLE_READDIR_ON_OPEN'] = 'TRUE'
-    #os.environ['VRT_SHARED_SOURCE'] = '1'
-    #os.environ['GTIFF_VIRTUAL_MEM_IO'] = 'TRUE'
     gdal2tiles_main(['gdal2tiles.py',
                      '-r', 'antialias',
                      '--verbose',
@@ -72,11 +75,11 @@ def create_base_tiles(inp_file, output_dir, zoom_levels):
                      '--exclude', 
                      '--resume', 
                      '--xyz', 
-                     '--processes=8', 
+                     '--processes', f'{pool._processes}', 
                      '-z', zoom_levels,
                      '--tiledriver', 'WEBP',
                      '--webp-quality', f'{WEBP_QUALITY}',
-                     inp_file, output_dir])
+                     inp_file, output_dir], pool=pool, called_from_main=True)
 
 
 
@@ -115,12 +118,13 @@ def check_sheets(sheets_to_pull, tiffs_dir):
 def copy_tiles_over(tiles_to_pull, tiles_dir, from_pmtiles_prefix):
     for tile in tiles_to_pull:
         to = Path(get_tile_file(tile, tiles_dir))
+        # TODO: check probably not required?
         if to.exists():
             continue
         pull_from_pmtiles(to, from_pmtiles_prefix)
 
 
-def create_upper_tiles(z, tiles_to_create, tiles_dir):
+def create_upper_tiles(z, tiles_to_create, tiles_dir, pool):
     options = AttrDict({
         'resume': True,
         'verbose': False,
@@ -141,12 +145,31 @@ def create_upper_tiles(z, tiles_to_create, tiles_dir):
         kml=False
     )
 
+    nb_processes = pool._processes
+
+    base_tile_groups = []
     for tile in tiles_to_create:
-        ctiles = mercantile.children(tile)
         tiles_dir.joinpath(str(tile.z), str(tile.x)).mkdir(parents=True, exist_ok=True)
+        ctiles = mercantile.children(tile)
         base_tile_group = [ (t.x, GDAL2Tiles.getYTile(t.y, t.z, options)) for t in ctiles ]
-        #print(f'{tile=}, {base_tile_group=}')
-        create_overview_tile(z + 1, output_folder=str(tiles_dir), tile_job_info=tile_job_info, options=options, base_tiles=base_tile_group)
+        base_tile_groups.append(base_tile_group)
+
+    chunksize = max(1, min(128, len(base_tile_groups) // nb_processes))
+
+    for _ in pool.imap_unordered(
+        partial(
+            create_overview_tile,
+            z+1,
+            output_folder=str(tiles_dir),
+            tile_job_info=tile_job_info,
+            options=options,
+        ),
+        base_tile_groups,
+        chunksize=chunksize,
+    ):
+        pass
+
+    print(f'Done creating {len(tiles_to_create)} tiles for zoom level {z}')
  
 
 def get_sheet_data(bounds_fname):
@@ -211,59 +234,28 @@ def create_vrt_file(sheets, tiffs_dir):
 
     return vrt_file
 
-def cli():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
-    parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
-    parser.add_argument('--min-zoom', type=int, help='Minimum zoom level to create tiles for')
-    parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for')
-    parser.add_argument('--sheets-to-pull-list-outfile', default=None,
-                        help='Output into which we write the list of sheet that need to be pulled, if set, the script ends after it created the list file')
-    parser.add_argument('--from-pmtiles-prefix', help='Prefix to the PMTiles source from which we pull tiles, if needs to be set when --sheets-to-pull-list-outfile is not set')
-    parser.add_argument('--tiles-dir', help='Directory where the tiles will be created')
-    parser.add_argument('--tiffs-dir', help='Directory where the tiffs are present')
 
-    args = parser.parse_args()
-    if not args.sheets_to_pull_list_outfile:
-        missing = []
-        if not args.from_pmtiles_prefix:
-            missing.append('--from-pmtiles-prefix')
-        if not args.tiles_dir:
-            missing.append('--tiles-dir')
-        if not args.tiffs_dir:
-            missing.append('--tiffs-dir')
-        
-        if missing:
-            parser.error(f"The following arguments are required when --sheets-to-pull-list-outfile is not provided: {', '.join(missing)}")
+def retile(args, pool=None):
 
     retile_sheets = Path(args.retile_list_file).read_text().split('\n')
     retile_sheets = set([ r.strip().replace('.tif', '') for r in retile_sheets if r.strip() != '' ])
 
     if args.from_pmtiles_prefix is None:
-        if not args.max_zoom:
-            parser.error('--max-zoom is required when --from-pmtiles-prefix is not set')
         max_zoom = args.max_zoom
-
-        if not args.min_zoom:
-            parser.error('--min-zoom is required when --from-pmtiles-prefix is not set')
         min_zoom = args.min_zoom
     else:
         reader = get_pmtiles_reader(args.from_pmtiles_prefix)
         max_zoom = reader.max_zoom
         min_zoom = reader.min_zoom
 
-
     print('getting base tiles to sheet mapping')
     sheets_to_box = get_sheet_data(args.bounds_file)
     sheets_to_base_tiles, base_tiles_to_sheets = get_base_tile_sheet_mappings(sheets_to_box, max_zoom)
-
-    all_affected_tiles = set()
 
     print('calculating sheets to pull')
     affected_base_tiles = set()
     for sheet_no in retile_sheets:
         affected_base_tiles.update(sheets_to_base_tiles[sheet_no])
-    all_affected_tiles.update(affected_base_tiles)
 
     sheets_to_pull = set()
     for tile in affected_base_tiles:
@@ -277,7 +269,7 @@ def cli():
         if args.tiffs_dir is not None:
             Path(args.tiffs_dir).mkdir(exist_ok=True, parents=True)
         Path(args.sheets_to_pull_list_outfile).write_text('\n'.join(sheets_to_pull) + '\n')
-        exit(0)
+        return
 
 
     tiles_dir = Path(args.tiles_dir)
@@ -292,7 +284,7 @@ def cli():
     Path(args.tiles_dir).mkdir(exist_ok=True, parents=True)
 
     print('creating tiles for base zoom with a vrt')
-    create_base_tiles(str(vrt_file), tiles_dir, f'{max_zoom}')
+    create_base_tiles(str(vrt_file), tiles_dir, f'{max_zoom}', pool)
 
     print('deleting unwanted base tiles')
     delete_unwanted_tiles(affected_base_tiles, max_zoom, tiles_dir)
@@ -304,7 +296,6 @@ def cli():
         curr_affected_tiles = set()
         for tile in prev_affected_tiles:
             curr_affected_tiles.add(mercantile.parent(tile))
-        all_affected_tiles.update(curr_affected_tiles)
 
         child_tiles_to_pull = set()
         for ptile in curr_affected_tiles:
@@ -316,7 +307,7 @@ def cli():
         copy_tiles_over(child_tiles_to_pull, tiles_dir, args.from_pmtiles_prefix)
 
         print('creating tiles for current level')
-        create_upper_tiles(z, curr_affected_tiles, tiles_dir)
+        create_upper_tiles(z, curr_affected_tiles, tiles_dir, pool)
 
         print('removing unwanted child tiles')
         delete_unwanted_tiles(prev_affected_tiles, z+1, tiles_dir)
@@ -325,9 +316,56 @@ def cli():
 
     print('All Done!!!')
 
+def cli():
+
+    # I don't care.. this shit isn't worth thinking about
+    if sys.platform == 'darwin':
+        set_start_method('fork')
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
+    parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
+    parser.add_argument('--min-zoom', type=int, help='Minimum zoom level to create tiles for')
+    parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for')
+    parser.add_argument('--sheets-to-pull-list-outfile', default=None,
+                        help='Output into which we write the list of sheet that need to be pulled, if set, the script ends after it created the list file')
+    parser.add_argument('--from-pmtiles-prefix', help='Prefix to the PMTiles source from which we pull tiles, if needs to be set when --sheets-to-pull-list-outfile is not set')
+    parser.add_argument('--tiles-dir', help='Directory where the tiles will be created')
+    parser.add_argument('--tiffs-dir', help='Directory where the tiffs are present')
+    parser.add_argument('--num-parallel', type=int, default=cpu_count(), help='Number of parallel processes to use for tiling (default: number of CPU cores)')
+
+    args = parser.parse_args()
+    if not args.sheets_to_pull_list_outfile:
+        missing = []
+        if not args.from_pmtiles_prefix:
+            missing.append('--from-pmtiles-prefix')
+        if not args.tiles_dir:
+            missing.append('--tiles-dir')
+        if not args.tiffs_dir:
+            missing.append('--tiffs-dir')
+        
+        if missing:
+            parser.error(f"The following arguments are required when --sheets-to-pull-list-outfile is not provided: {', '.join(missing)}")
+
+    if args.from_pmtiles_prefix is None:
+        if not args.max_zoom:
+            parser.error('--max-zoom is required when --from-pmtiles-prefix is not set')
+
+        if not args.min_zoom:
+            parser.error('--min-zoom is required when --from-pmtiles-prefix is not set')
+
+    os.environ['GDAL_CACHEMAX'] = '2048'
+    os.environ['GDAL_MAX_DATASET_POOL_SIZE'] = '5000'
+    os.environ['GDAL_DISABLE_READDIR_ON_OPEN'] = 'TRUE'
+    #os.environ['VRT_SHARED_SOURCE'] = '1'
+    #os.environ['GTIFF_VIRTUAL_MEM_IO'] = 'TRUE'
+    with DividedCache(args.num_parallel), Pool(processes=args.num_parallel) as pool:
+        retile(args, pool)
+    return 0
+
 
 if __name__ == '__main__':
-    cli()
+    sys.exit(cli())
 
 
 

@@ -16,7 +16,7 @@ from pprint import pprint
 from pmtiles.tile import zxy_to_tileid, TileType, Compression
 from pmtiles.writer import Writer as PMTilesWriter
 
-from tile_sources import (
+from .tile_sources import (
     DiskSource,
     DiskAndPartitionedPMTilesSource,
     MissingTileError
