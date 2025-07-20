@@ -73,7 +73,7 @@ The `TopoMapProcessor` class provides a framework for processing individual map 
 Here's an example of how to use the `TopoMapProcessor` class.
 
 ```python
-from topo_map_processor import TopoMapProcessor, LineRemovalParams
+from topo_map_processor.processor import TopoMapProcessor, LineRemovalParams
 
 class SampleProcessor(TopoMapProcessor):
 
@@ -159,6 +159,14 @@ Similar to corner detection, the `locate_grid_lines` method can be implemented u
 
 -   **`get_grid_line_corrections`**: This method serves as a refinement step to improve accuracy. While the transformer provides a very close estimate, this function can correct for minor printing or scanning inaccuracies. For each projected grid intersection, it searches a small area in the actual image for the *true* intersection of printed lines, adjusting the point to match the visual data. This ensures that the lines targeted for removal are precisely the ones printed on the map.
 
+### Tile Sources
+
+The `topo_map_processor.tools.tile_sources` module provides classes for reading tiles from different sources.
+
+-   `DiskSource`: Reads tiles from a directory on the local disk.
+-   `PartitionedPMTilesSource`: Reads tiles from a set of partitioned PMTiles files.
+-   `DiskAndPartitionedPMTilesSource`: Reads tiles from both a local directory and a set of partitioned PMTiles files, useful for retiling.
+
 ### Command-Line Tools
 
 This project provides several command-line tools to work with topographic maps. These tools are dynamically loaded, and you can get the most up-to-date usage information by running the tool with the `--help` flag.
@@ -203,7 +211,7 @@ The tool works in two stages. First, it calculates the full set of sheets that n
 In the second stage, it retiles the affected area. It uses the pull list to create a temporary virtual raster (`.vrt`), generates new base tiles for the affected region, and then reconstructs the upper-level tiles by pulling existing, unaffected tiles from the PMTiles source.
 
 ```bash
-retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--min-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-pmtiles-prefix <prefix>] [--sheets-to-pull-list-outfile <file>]
+retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--min-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-pmtiles-prefix <prefix>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>]
 ```
 
 -   `--retile-list-file`: File containing the list of sheets to retile. (Required)
@@ -214,19 +222,21 @@ retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--min
 -   `--tiles-dir`: Directory where the tiles will be created. (Required if not in pull-list generation mode)
 -   `--from-pmtiles-prefix`: Prefix for the PMTiles source from which to pull existing tiles. (Required if not in pull-list generation mode)
 -   `--sheets-to-pull-list-outfile`: If provided, the script will only calculate the full list of sheets that need to be processed (including adjacent ones) and write it to this file, then exit.
+-   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
 
 #### `tile`
 
 Creates web map tiles from a directory of GeoTIFF files. It combines them into a virtual raster (`.vrt`) for efficient processing.
 
 ```bash
-tile <tiles-dir> <tiffs-dir> <max-zoom> [<min-zoom>]
+tile --tiles-dir <dir> --tiffs-dir <dir> --max-zoom <zoom> [--min-zoom <zoom>] [--num-parallel <processes>]
 ```
 
 -   `<tiles-dir>`: Directory to store the output tiles. (Required)
 -   `<tiffs-dir>`: Directory containing the input GeoTIFF files. (Required)
 -   `<max-zoom>`: Maximum zoom level for tiling. (Required)
 -   `<min-zoom>`: Minimum zoom level for tiling (default: 0).
+-   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
 
 ### Running Tools Directly with `uvx`
 

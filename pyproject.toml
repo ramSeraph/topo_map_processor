@@ -8,20 +8,26 @@ authors = [
     { name = "Sreeram Kandimalla", email = "kandimalla.sreeram@gmail.com" },
 ]
 dependencies = [
-    "easyocr>=1.7.2",
-    "imgcat>=0.6.0",
     "mercantile>=1.2.1",
-    "numpy>=2.3.1",
-    "opencv-python-headless>=4.11.0.86",
-    "pillow>=11.3.0",
     "pmtiles>=3.4.1",
-    "pyproj>=3.7.1",
-    "pytesseract>=0.3.13",
-    "rasterio>=1.4.3",
     "shapely>=2.1.1",
 ]
 dynamic = [
     "version"
+]
+
+[project.optional-dependencies]
+easyocr = [
+    "easyocr>=1.7.2",
+]
+parse = [
+    "numpy>=2.3.1",
+    "pillow>=11.3.0",
+    "imgcat>=0.6.0",
+    "opencv-python-headless>=4.11.0.86",
+    "pyproj>=3.7.1",
+    "pytesseract>=0.3.13",
+    "rasterio>=1.4.3",
 ]
 
 [project.urls]
@@ -34,6 +40,8 @@ collect-bounds = "topo_map_processor.tools.collect_bounds:cli"
 partition = "topo_map_processor.tools.partition:cli"
 retile = "topo_map_processor.tools.retile:cli"
 tile = "topo_map_processor.tools.tile:cli"
+generate-lists = "topo_map_processor.tools.execute_bash:generate_lists"
+upload-to-release = "topo_map_processor.tools.execute_bash:upload_to_release"
 
 
 [build-system]
@@ -49,6 +57,15 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "topo_map_processor/_version.py"
 
-tool.hatch.build.targets.sdist.include = [
-    "topo_map_processor"
+[tool.hatch.build.targets.sdist]
+include = [
+    "topo_map_processor",
+    "topo_map_processor/bash_scripts/**",
 ]
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "topo_map_processor",
+    "topo_map_processor/bash_scripts/**",
+]
+
