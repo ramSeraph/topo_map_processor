@@ -1,15 +1,16 @@
 import re
 import os
+import sys
 import glob
+import json
 import argparse
-
 import time
 import subprocess
 
 from pathlib import Path
 from multiprocessing import set_start_method, cpu_count
 
-from osgeo_utils.gdal2tiles import main as gdal2tiles_main
+from osgeo_utils.gdal2tiles import submain as gdal2tiles_main
 
 def run_external(cmd):
     print(f'running cmd - {cmd}')
@@ -32,18 +33,57 @@ def convert_paths_in_vrt(vrt_file):
     )
     vrt_file.write_text(replaced)
 
+def get_tiler_cmd_params(tile_extension, tile_quality):
+
+    if tile_extension == 'webp':
+        return [
+            '--tiledriver', 'WEBP',
+            '--webp-quality', str(tile_quality),
+        ]
+
+    if tile_extension in ['jpg', 'jpeg']:
+        return [
+            '--tiledriver', 'JPEG',
+            '--jpeg_quality', str(tile_quality),
+        ]
+
+    if tile_extension == 'png':
+        return [
+            '--tiledriver', 'PNG',
+        ]
+
+    raise ValueError(f'Unsupported tile extension: {tile_extension}')
+
+
+
 def cli():
     if sys.platform == 'darwin':
         set_start_method('fork')
 
-    parser = argparse.ArgumentParser(description='Tile the GTiffs')
+    parser = argparse.ArgumentParser(description='Tile the GTiffs and create a TileJSON file')
     parser.add_argument('--tiles-dir', required=True, help='Directory to store the tiles')
     parser.add_argument('--tiffs-dir', required=True, help='Directory with GTiffs to tile')
     parser.add_argument('--max-zoom', type=int, required=True, help='Maximum zoom level for tiling')
     parser.add_argument('--min-zoom', type=int, default=0, help='Minimum zoom level for tiling')
+    parser.add_argument('--tile-extension', type=str, default='webp', choices=['webp', 'jpg', 'jpeg', 'png'], help='Tile file extension (default: webp)')
+    parser.add_argument('--tile-quality', type=int, default=75, help='Compression quality of the tiles (default: 75)')
     parser.add_argument('--num-parallel', type=int, default=cpu_count(), help='Number of parallel processes to use for tiling (default: number of CPU cores)')
+    parser.add_argument('--name', required=True, help='Name of the mosaic.')
+    parser.add_argument('--description', required=True, help='Description of the mosaic.')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--attribution', help='Attribution text for the mosaic.')
+    group.add_argument('--attribution-file', help='File containing attribution text for the mosaic.')
 
     args = parser.parse_args()
+
+    if args.attribution_file:
+        attribution_file = Path(args.attribution_file)
+        if not attribution_file.exists():
+            parser.error(f'Attribution file {args.attribution_file} does not exist')
+        attribution_text = attribution_file.read_text().strip()
+    else:
+        attribution_text = args.attribution
+
 
     tiles_dir = Path(args.tiles_dir)
     tiles_dir.mkdir(parents=True, exist_ok=True)
@@ -81,18 +121,33 @@ def cli():
         '--processes', f'{args.num_parallel}', 
         '--processes=8', 
         '-z', f'{args.min_zoom}-{args.max_zoom}',
-        '--tiledriver', 'WEBP',
-        '--webp-quality', '75',
+    ] + get_tiler_cmd_params(args.tile_extension, args.tile_quality) + [
         str(vrt_file), str(tiles_dir)
     ]
-    print(cmd)
-    gdal2tiles_main(cmd, calling_from_main=True)
+    gdal2tiles_main(cmd, called_from_main=True)
 
     vrt_file.unlink()
+
+    metadata_file = tiles_dir / 'tiles.json'
+    if args.tile_extension == 'jpg':
+        format = 'jpeg'
+    else:
+        format = args.tile_extension
+
+    # it is not really a proper tilejson spec.. it is the basic things needed to populate a pmtiles metadata
+    metadata = {
+        'type': 'baselayer',
+        'format': format,
+        'attribution': attribution_text,
+        'description': args.description,
+        'name': args.name,
+        'version': '1',
+        'maxzoom': args.max_zoom,
+        'minzoom': args.min_zoom,
+    }
+    metadata_file.write_text(json.dumps(metadata, indent=2))
 
     print('All Done!!')
 
 if __name__ == '__main__':
     cli()
-
-

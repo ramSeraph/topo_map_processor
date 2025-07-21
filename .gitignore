@@ -1,5 +1,6 @@
 # Python-generated files
 __pycache__/
+topo_map_processor/_version.py
 *.py[oc]
 build/
 dist/

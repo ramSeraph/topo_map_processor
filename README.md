@@ -163,9 +163,10 @@ Similar to corner detection, the `locate_grid_lines` method can be implemented u
 
 The `topo_map_processor.tools.tile_sources` module provides classes for reading tiles from different sources.
 
--   `DiskSource`: Reads tiles from a directory on the local disk.
--   `PartitionedPMTilesSource`: Reads tiles from a set of partitioned PMTiles files.
--   `DiskAndPartitionedPMTilesSource`: Reads tiles from both a local directory and a set of partitioned PMTiles files, useful for retiling.
+-   `DiskTilesSource`: Reads tiles from a directory on the local disk.
+-   `MBTilesSource`: Reads tiles from an MBTiles file.
+-   `PMTilesSource`: Reads tiles from a PMTiles file.
+-   `StackedTileSource`: Combines multiple tile sources (Disk, MBTiles, PMTiles) into a single logical source, allowing for seamless access across different storage types.
 
 ### Command-Line Tools
 
@@ -183,24 +184,37 @@ collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file
 -   `--output-file`: Output GeoJSON file path. (Required)
 -   `--preexisting-file`: Pre existing GeoJSON file path. (Optional)
 
-#### `partition`
+#### `download-mosaic`
 
-Partitions a large set of tiles into smaller PMTiles files. This is useful for managing large datasets, for example, to stay within file size limits for services like GitHub Releases. When run with `--only-disk`, it creates a new partitioned `pmtiles` fileset from a directory of tiles. When run without, it can be used to re-partition an existing `pmtiles` fileset, for example after having retiled some of the sheets.
+Downloads a PMTiles mosaic and converts it to a single MBTiles file. A mosaic is a JSON file that lists multiple PMTiles files.
 
 ```bash
-partition --to-pmtiles-prefix <prefix> --from-tiles-dir <dir> [--from-pmtiles-prefix <prefix>] [--name <name>] [--description <desc>] [--max-zoom <zoom>] [--min-zoom <zoom>] [--only-disk] (--attribution <text> | --attribution-file <file>)
+download-mosaic --mosaic_url <url> [--output_file <file>] [--request-timeout-secs <seconds>] [--num-http-retries <retries>]
 ```
 
--   `--to-pmtiles-prefix`: Prefix for the output PMTiles files. (Required)
--   `--from-tiles-dir`: Directory containing the input tiles. (Required)
--   `--from-pmtiles-prefix`: Prefix for input PMTiles files (required if not using `--only-disk`).
--   `--name`: Name of the mosaic. (Required if using `--only-disk`)
--   `--description`: Description of the mosaic. (Required if using `--only-disk`)
--   `--max-zoom`: Maximum zoom level for the mosaic. (Defaults to the max zoom found in the source)
--   `--min-zoom`: Minimum zoom level for the mosaic (default: 0).
--   `--only-disk`: Only read tiles from the local disk.
--   `--attribution`: Attribution text for the mosaic. (Required if using `--only-disk`)
--   `--attribution-file`: File containing attribution text. (Required if using `--only-disk`)
+-   `--mosaic_url`, `-u`: URL of the mosaic JSON file. (Required)
+-   `--output_file`, `-o`: Output MBTiles file name. If not specified, it is derived from the mosaic URL. (Optional)
+-   `--request-timeout-secs`, `-t`: Timeout for HTTP requests in seconds (default: 60).
+-   `--num-http-retries`, `-r`: Number of retries for HTTP requests (default: 3).
+
+#### `partition`
+
+Partitions a large set of tiles into smaller PMTiles files. This is useful for managing large datasets, for example, to stay within file size limits for services like GitHub Releases. It creates a mosaic file if the output is partitioned into multiple files.
+
+```bash
+partition --from-source <source> [--from-source <source> ...] --to-pmtiles <file> [--size-limit <limit>]
+```
+
+-   `--from-source`: Path to a source file or directory. Can be repeated. Supported sources:
+    -   `.mbtiles` file: e.g., `path/to/file.mbtiles`
+    -   `.pmtiles` file (supports glob patterns): e.g., `path/to/*.pmtiles`
+    -   Directory containing tiles: e.g., `path/to/tiles_dir`
+-   `--to-pmtiles`: Output PMTiles file. The prefix for partitioned files will be derived from this argument.
+-   `--size-limit`: Maximum size of each partition. Can be a number in bytes (e.g., `100000000`), or with units (e.g., `100M`, `2G`), or a preset:
+    -   `github_release`: 2GB limit
+    -   `github_file`: 100MB limit
+    -   `cloudflare_object`: 512MB limit
+    The overhead (delta) is scaled proportionally based on the `github_release` preset (2GB with 5MB overhead). Defaults to `github_release`.
 
 #### `retile`
 
@@ -211,31 +225,37 @@ The tool works in two stages. First, it calculates the full set of sheets that n
 In the second stage, it retiles the affected area. It uses the pull list to create a temporary virtual raster (`.vrt`), generates new base tiles for the affected region, and then reconstructs the upper-level tiles by pulling existing, unaffected tiles from the PMTiles source.
 
 ```bash
-retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--min-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-pmtiles-prefix <prefix>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>]
+retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-source <source>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>] [--tile-quality <quality>]
 ```
 
 -   `--retile-list-file`: File containing the list of sheets to retile. (Required)
 -   `--bounds-file`: GeoJSON file containing the list of available sheets and their geographic bounds. (Required)
--   `--max-zoom`: Maximum zoom level to create tiles for. (Defaults to the max zoom from the PMTiles source)
--   `--min-zoom`: Minimum zoom level to create tiles for. (Defaults to the min zoom from the PMTiles source)
+-   `--max-zoom`: Maximum zoom level to create tiles for. Defaults to the max zoom from the source if `--from-source` is provided, otherwise it is required.
 -   `--tiffs-dir`: Directory where the GeoTIFFs are located. (Required if not in pull-list generation mode)
 -   `--tiles-dir`: Directory where the tiles will be created. (Required if not in pull-list generation mode)
--   `--from-pmtiles-prefix`: Prefix for the PMTiles source from which to pull existing tiles. (Required if not in pull-list generation mode)
+-   `--from-source`: Location of the source from which to pull existing tiles. Can be a glob pattern to match a group of pmtiles. Required if not in pull-list generation mode.
 -   `--sheets-to-pull-list-outfile`: If provided, the script will only calculate the full list of sheets that need to be processed (including adjacent ones) and write it to this file, then exit.
 -   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
+-   `--tile-quality`: Quality of compression for webp and jpg (default: 75).
 
 #### `tile`
 
 Creates web map tiles from a directory of GeoTIFF files. It combines them into a virtual raster (`.vrt`) for efficient processing.
 
 ```bash
-tile --tiles-dir <dir> --tiffs-dir <dir> --max-zoom <zoom> [--min-zoom <zoom>] [--num-parallel <processes>]
+tile --tiles-dir <dir> --tiffs-dir <dir> --max-zoom <zoom> --name <name> --description <desc> (--attribution <text> | --attribution-file <file>) [--min-zoom <zoom>] [--tile-extension <ext>] [--tile-quality <quality>] [--num-parallel <processes>]
 ```
 
--   `<tiles-dir>`: Directory to store the output tiles. (Required)
--   `<tiffs-dir>`: Directory containing the input GeoTIFF files. (Required)
--   `<max-zoom>`: Maximum zoom level for tiling. (Required)
--   `<min-zoom>`: Minimum zoom level for tiling (default: 0).
+-   `--tiles-dir`: Directory to store the output tiles. (Required)
+-   `--tiffs-dir`: Directory containing the input GeoTIFF files. (Required)
+-   `--max-zoom`: Maximum zoom level for tiling. (Required)
+-   `--name`: Name of the mosaic. (Required)
+-   `--description`: Description of the mosaic. (Required)
+-   `--attribution`: Attribution text for the mosaic. Required if `--attribution-file` is not used.
+-   `--attribution-file`: File containing attribution text for the mosaic. Required if `--attribution` is not used.
+-   `--min-zoom`: Minimum zoom level for tiling (default: 0).
+-   `--tile-extension`: Tile file extension (default: webp). Choices: `webp`, `jpg`, `jpeg`, `png`.
+-   `--tile-quality`: Compression quality of the tiles for `webp` and `jpg` (default: 75).
 -   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
 
 ### Running Tools Directly with `uvx`

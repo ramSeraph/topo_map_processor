@@ -10,6 +10,7 @@
 import os
 import re
 import sys
+import glob
 import json
 import argparse
 
@@ -32,15 +33,7 @@ from osgeo_utils.gdal2tiles import (
     DividedCache,
 )
 
-from .tile_sources import PartitionedPMTilesSource, MissingTileError
-
-WEBP_QUALITY = 75
-
-class AttrDict(dict):
-    def __init__(self, *args, **kwargs):
-        super(AttrDict, self).__init__(*args, **kwargs)
-        self.__dict__ = self
-
+from .tile_sources import create_source_from_paths, MissingTileError
 
 def run_external(cmd):
     print(f'running cmd - {cmd}')
@@ -54,123 +47,280 @@ def run_external(cmd):
         raise Exception(f'command {cmd} failed')
 
 
-def convert_paths_in_vrt(vrt_file):
-    # <SourceFilename relativeToVRT="1">40M_15.tif</SourceFilename>
-    vrt_dirname = str(vrt_file.resolve().parent)
-    vrt_text = vrt_file.read_text()
-    replaced = re.sub(
-        r'<SourceFilename relativeToVRT="1">(.*)</SourceFilename>',
-        rf'<SourceFilename relativeToVRT="0">{vrt_dirname}/\1</SourceFilename>',
-        vrt_text
-    )
-    vrt_file.write_text(replaced)
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
+class DiskTilesHandler:
+    def __init__(self, tiles_dir, tile_extension):
+        self.dir = Path(tiles_dir)
+        self.ext = tile_extension
+
+    def init(self):
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def preprare_dir(self, tile):
+        tile_dir = self.dir.joinpath(f'{tile.z}/{tile.x}')
+        tile_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_tile_file(self, tile):
+        return self.dir.joinpath(f'{tile.z}/{tile.x}/{tile.y}.{self.ext}')
+
+    def all_z_tiles(self, z):
+        z_dir = self.dir.joinpath(str(z))
+        for f in z_dir.glob(f'*/*.{self.ext}'):
+            parts = f.parts
+            x = int(parts[-2])
+            y = int(parts[-1].replace(f'.{self.ext}', ''))
+            yield mercantile.Tile(x=x, y=y, z=z)
+
+    def del_tile(self, tile):
+        tile_file = self.get_tile_file(tile)
+        if tile_file.exists():
+            tile_file.unlink()
+
+    def delete_unwanted_tiles(self, tiles_to_keep, z):
+        delete_count = 0
     
-def create_base_tiles(inp_file, output_dir, zoom_levels, pool):
-    print('start tiling')
-    gdal2tiles_main(['gdal2tiles.py',
-                     '-r', 'antialias',
-                     '--verbose',
-                     '-w', 'none',
-                     '--exclude', 
-                     '--resume', 
-                     '--xyz', 
-                     '--processes', f'{pool._processes}', 
-                     '-z', zoom_levels,
-                     '--tiledriver', 'WEBP',
-                     '--webp-quality', f'{WEBP_QUALITY}',
-                     inp_file, output_dir], pool=pool, called_from_main=True)
+        for tile in self.all_z_tiles(z):
+            if tile not in tiles_to_keep:
+                self.del_tile(tile)
+                delete_count += 1
+    
+        print(f'deleted {delete_count} files at level {z}')
+
+    def save_metadata(self, metadata):
+        metadata_file = self.dir.joinpath('tiles.json')
+        metadata_file.write_text(json.dumps(metadata, indent=2))
+
+ 
+class Tiler:
+    def __init__(self, tiles_dir, tiffs_dir,
+                 orig_tile_source, tile_extension, tile_quality, pool):
+
+        self.disk_handler = DiskTilesHandler(tiles_dir, tile_extension)
+        self.orig_tile_source = orig_tile_source
+        self.tiffs_dir = tiffs_dir
+        self.tile_extension = tile_extension
+        self.tile_quality = tile_quality
+        self.pool = pool
+
+    def convert_paths_in_vrt(self, vrt_file):
+        # <SourceFilename relativeToVRT="1">40M_15.tif</SourceFilename>
+        vrt_dirname = str(vrt_file.resolve().parent)
+        vrt_text = vrt_file.read_text()
+        replaced = re.sub(
+            r'<SourceFilename relativeToVRT="1">(.*)</SourceFilename>',
+            rf'<SourceFilename relativeToVRT="0">{vrt_dirname}/\1</SourceFilename>',
+            vrt_text
+        )
+        vrt_file.write_text(replaced)
 
 
+    def create_vrt_file(self, sheets):
+        vrt_file = self.tiffs_dir.joinpath('combined.vrt')
+        if vrt_file.exists():
+            return vrt_file
+        tiff_list = [ self.tiffs_dir.joinpath(f'{sheet}').resolve() for sheet in sheets ]
+        tiff_list = [ str(f) for f in tiff_list if f.exists() ]
 
-pmtiles_reader = None
-def get_pmtiles_reader(from_pmtiles_prefix):
-    global pmtiles_reader
-    if pmtiles_reader is None:
-        pmtiles_reader = PartitionedPMTilesSource(from_pmtiles_prefix)
-    return pmtiles_reader
+        tiff_list_str = ' '.join(tiff_list)
+
+        run_external(f'gdalbuildvrt {vrt_file} {tiff_list_str}')
+        self.convert_paths_in_vrt(vrt_file)
+
+        return vrt_file
+
+    def get_tiler_cmd_params(self):
+        params = [
+            '--tiledriver', self.get_tile_driver()
+        ]
+
+        if self.tile_extension == 'webp':
+            return params + [
+                '--webp-quality', str(self.tile_quality),
+            ]
+
+        if self.tile_extension == 'jpg':
+            return params + [
+                '--jpeg_quality', str(self.tile_quality),
+            ]
+
+        if self.tile_extension == 'png':
+            return params
+
+        raise ValueError(f'Unsupported tile extension: {self.tile_extension}')
+
+    def get_tile_driver(self):
+        if self.tile_extension == 'webp':
+            return 'WEBP'
+
+        if self.tile_extension == 'jpg':
+            return 'JPEG'
+
+        if self.tile_extension == 'png':
+            return 'PNG'
+
+        raise ValueError(f'Unsupported tile extension: {self.tile_extension}')
+
+    def get_tiler_options(self):
+        if self.tile_extension == 'webp':
+            return {
+                'webp_quality': self.tile_quality,
+                'webp_lossless': False,
+            }
+
+        if self.tile_extension == 'jpg':
+            return {
+                'jpeg_quality': self.tile_quality,
+            }
+
+        if self.tile_extension == 'png':
+            return {}
+
+        raise ValueError(f'Unsupported tile extension: {self.tile_extension}')
+
+    def create_base_tiles(self, sheets, max_zoom):
+        print('creating vrt file from sheets involved')
+        vrt_file = self.create_vrt_file(sheets)
+
+        print('start creating base tiles')
+        cmd = [
+            'gdal2tiles.py',
+            '-r', 'antialias',
+            '--verbose',
+            '-w', 'none',
+            '--exclude', 
+            '--resume', 
+            '--xyz', 
+            '--processes', f'{self.pool._processes}', 
+            '-z', f'{max_zoom}'
+        ] + self.get_tiler_cmd_params() + [
+            str(vrt_file), str(self.disk_handler.dir)
+        ]
+
+        gdal2tiles_main(cmd, pool=self.pool, called_from_main=True)
+        vrt_file.unlink()
+
+    def create_upper_tiles(self, z, tiles_to_create):
+        tile_driver = self.get_tile_driver()
+    
+        options_dict = {
+            'resume': True,
+            'verbose': False,
+            'quiet': False,
+            'xyz': True,
+            'exclude_transparent': True,
+            'profile': 'mercator',
+            'resampling': 'antialias',
+            'tiledriver': tile_driver,
+        }
+        options_dict.update(self.get_tiler_options())
+
+        options = AttrDict(options_dict)
+
+        tile_job_info = TileJobInfo(
+            tile_driver=tile_driver,
+            nb_data_bands=3,
+            tile_size=256,
+            tile_extension=self.tile_extension,
+            kml=False
+        )
+    
+        nb_processes = self.pool._processes
+    
+        base_tile_groups = []
+        for tile in tiles_to_create:
+            self.disk_handler.preprare_dir(tile)
+            ctiles = mercantile.children(tile)
+            base_tile_group = [ (t.x, GDAL2Tiles.getYTile(t.y, t.z, options)) for t in ctiles ]
+            base_tile_groups.append(base_tile_group)
+    
+        chunksize = max(1, min(128, len(base_tile_groups) // nb_processes))
+    
+        for _ in self.pool.imap_unordered(
+            partial(
+                create_overview_tile,
+                z+1,
+                output_folder=str(self.disk_handler.dir),
+                tile_job_info=tile_job_info,
+                options=options,
+            ),
+            base_tile_groups,
+            chunksize=chunksize,
+        ):
+            pass
+    
+        print(f'Done creating {len(tiles_to_create)} tiles for zoom level {z}')
+ 
+
+    def copy_tiles_over(self, tiles_to_pull):
+        for tile in tiles_to_pull:
+            tile_file = self.disk_handler.get_tile_file(tile)
+            # TODO: check probably not required?
+            if tile_file.exists():
+                continue
+
+            try:
+                t_data = self.orig_tile_source.get_tile_data(tile)
+            except MissingTileError:
+                continue
+
+            self.disk_handler.preprare_dir(tile)
+            tile_file.write_bytes(t_data)
 
 
-def pull_from_pmtiles(file, from_pmtiles_prefix):
-    reader = get_pmtiles_reader(from_pmtiles_prefix)
-    fname = str(file)
-    pieces = fname.split('/')
-    tile = mercantile.Tile(x=int(pieces[-2]),
-                           y=int(pieces[-1].replace('.webp', '')),
-                           z=int(pieces[-3]))
-    try:
-        t_data = reader.get_tile_data(tile)
-    except MissingTileError:
-        return
-    file.parent.mkdir(exist_ok=True, parents=True)
-    file.write_bytes(t_data)
+    def retile(self, sheet_list, affected_base_tiles):
+    
+        max_zoom = self.orig_tile_source.max_zoom
+        min_zoom = self.orig_tile_source.min_zoom
+    
+        self.disk_handler.init()
+    
+        self.create_base_tiles(sheet_list, max_zoom)
+    
+        print('deleting unwanted base tiles')
+        self.disk_handler.delete_unwanted_tiles(affected_base_tiles, max_zoom)
+    
+        prev_affected_tiles = affected_base_tiles
+        for z in range(max_zoom - 1, min_zoom - 1, -1):
+            print(f'handling level {z}')
+    
+            curr_affected_tiles = set()
+            for tile in prev_affected_tiles:
+                curr_affected_tiles.add(mercantile.parent(tile))
+    
+            child_tiles_to_pull = set()
+            for ptile in curr_affected_tiles:
+                for ctile in mercantile.children(ptile):
+                    if ctile not in prev_affected_tiles:
+                        child_tiles_to_pull.add(ctile)
+    
+            print('copying additional child tiles required for curr level')
+            self.copy_tiles_over(child_tiles_to_pull)
+    
+            print('creating tiles for current level')
+            self.create_upper_tiles(z, curr_affected_tiles)
+    
+            print('removing unwanted child tiles')
+            self.disk_handler.delete_unwanted_tiles(prev_affected_tiles, z+1)
+    
+            prev_affected_tiles = curr_affected_tiles
+    
+        self.disk_handler.save_metadata(self.orig_tile_source.get_metadata())
+        print('All Done!!!')
 
-
-def get_tile_file(tile, tiles_dir):
-    return f'{tiles_dir}/{tile.z}/{tile.x}/{tile.y}.webp'
 
 def check_sheets(sheets_to_pull, tiffs_dir):
+    missing = []
     for sheet_no in sheets_to_pull:
-        to = tiffs_dir.joinpath(f'{sheet_no}')
-        if not to.exists():
-            raise Exception(f'missing file {to}')
+        file = tiffs_dir.joinpath(f'{sheet_no}')
+        if not file.exists():
+            missing.append(file)
+    if len(missing):
+        raise Exception(f'missing files {missing}')
 
-def copy_tiles_over(tiles_to_pull, tiles_dir, from_pmtiles_prefix):
-    for tile in tiles_to_pull:
-        to = Path(get_tile_file(tile, tiles_dir))
-        # TODO: check probably not required?
-        if to.exists():
-            continue
-        pull_from_pmtiles(to, from_pmtiles_prefix)
-
-
-def create_upper_tiles(z, tiles_to_create, tiles_dir, pool):
-    options = AttrDict({
-        'resume': True,
-        'verbose': False,
-        'quiet': False,
-        'xyz': True,
-        'exclude_transparent': True,
-        'profile': 'mercator',
-        'resampling': 'antialias',
-        'tiledriver': 'WEBP',
-        'webp_quality': WEBP_QUALITY,
-        'webp_lossless': False
-    })
-    tile_job_info = TileJobInfo(
-        tile_driver='WEBP',
-        nb_data_bands=3,
-        tile_size=256,
-        tile_extension='webp',
-        kml=False
-    )
-
-    nb_processes = pool._processes
-
-    base_tile_groups = []
-    for tile in tiles_to_create:
-        tiles_dir.joinpath(str(tile.z), str(tile.x)).mkdir(parents=True, exist_ok=True)
-        ctiles = mercantile.children(tile)
-        base_tile_group = [ (t.x, GDAL2Tiles.getYTile(t.y, t.z, options)) for t in ctiles ]
-        base_tile_groups.append(base_tile_group)
-
-    chunksize = max(1, min(128, len(base_tile_groups) // nb_processes))
-
-    for _ in pool.imap_unordered(
-        partial(
-            create_overview_tile,
-            z+1,
-            output_folder=str(tiles_dir),
-            tile_job_info=tile_job_info,
-            options=options,
-        ),
-        base_tile_groups,
-        chunksize=chunksize,
-    ):
-        pass
-
-    print(f'Done creating {len(tiles_to_create)} tiles for zoom level {z}')
- 
 
 def get_sheet_data(bounds_fname):
 
@@ -205,51 +355,15 @@ def get_base_tile_sheet_mappings(sheets_to_box, base_zoom):
 
     return sheets_to_base_tiles, base_tiles_to_sheets
 
+   
 
-def delete_unwanted_tiles(tiles_to_keep, z, tiles_dir):
-    delete_count = 0
-    for file in tiles_dir.glob(f'{z}/*/*.webp'):
-        y = int(file.name[:-5])
-        x = int(file.parent.name)
-            
-        disk_tile = mercantile.Tile(z=z, x=x, y=y)
-        if disk_tile not in tiles_to_keep:
-            #print(f'deleting {disk_tile}')
-            file.unlink()
-            delete_count += 1
-    print(f'deleted {delete_count} files at level {z}')
+def assess_sheet_requirements(retile_list_file, bounds_file, max_zoom):
 
-
-def create_vrt_file(sheets, tiffs_dir):
-    vrt_file = Path(f'{tiffs_dir}/combined.vrt')
-    if vrt_file.exists():
-        return vrt_file
-    tiff_list = [ tiffs_dir.joinpath(f'{p_sheet}').resolve() for p_sheet in sheets ]
-    tiff_list = [ str(f) for f in tiff_list if f.exists() ]
-
-    tiff_list_str = ' '.join(tiff_list)
-
-    run_external(f'gdalbuildvrt {vrt_file} {tiff_list_str}')
-    convert_paths_in_vrt(vrt_file)
-
-    return vrt_file
-
-
-def retile(args, pool=None):
-
-    retile_sheets = Path(args.retile_list_file).read_text().split('\n')
+    retile_sheets = retile_list_file.read_text().split('\n')
     retile_sheets = set([ r.strip().replace('.tif', '') for r in retile_sheets if r.strip() != '' ])
 
-    if args.from_pmtiles_prefix is None:
-        max_zoom = args.max_zoom
-        min_zoom = args.min_zoom
-    else:
-        reader = get_pmtiles_reader(args.from_pmtiles_prefix)
-        max_zoom = reader.max_zoom
-        min_zoom = reader.min_zoom
-
     print('getting base tiles to sheet mapping')
-    sheets_to_box = get_sheet_data(args.bounds_file)
+    sheets_to_box = get_sheet_data(bounds_file)
     sheets_to_base_tiles, base_tiles_to_sheets = get_base_tile_sheet_mappings(sheets_to_box, max_zoom)
 
     print('calculating sheets to pull')
@@ -263,58 +377,7 @@ def retile(args, pool=None):
         for sheet in to_add:
             sheets_to_pull.add(sheet + '.tif')
 
-    print(f'{sheets_to_pull=}')
-        
-    if args.sheets_to_pull_list_outfile is not None:
-        if args.tiffs_dir is not None:
-            Path(args.tiffs_dir).mkdir(exist_ok=True, parents=True)
-        Path(args.sheets_to_pull_list_outfile).write_text('\n'.join(sheets_to_pull) + '\n')
-        return
-
-
-    tiles_dir = Path(args.tiles_dir)
-    tiffs_dir = Path(args.tiffs_dir)
-
-    print('check the sheets availability')
-    check_sheets(sheets_to_pull, tiffs_dir)
-
-    print('creating vrt file from sheets involved')
-    vrt_file = create_vrt_file(sheets_to_pull, tiffs_dir)
-
-    Path(args.tiles_dir).mkdir(exist_ok=True, parents=True)
-
-    print('creating tiles for base zoom with a vrt')
-    create_base_tiles(str(vrt_file), tiles_dir, f'{max_zoom}', pool)
-
-    print('deleting unwanted base tiles')
-    delete_unwanted_tiles(affected_base_tiles, max_zoom, tiles_dir)
-
-    prev_affected_tiles = affected_base_tiles
-    for z in range(max_zoom-1, min_zoom-1, -1):
-        print(f'handling level {z}')
-
-        curr_affected_tiles = set()
-        for tile in prev_affected_tiles:
-            curr_affected_tiles.add(mercantile.parent(tile))
-
-        child_tiles_to_pull = set()
-        for ptile in curr_affected_tiles:
-            for ctile in mercantile.children(ptile):
-                if ctile not in prev_affected_tiles:
-                    child_tiles_to_pull.add(ctile)
-
-        print('copying additional child tiles required for curr level')
-        copy_tiles_over(child_tiles_to_pull, tiles_dir, args.from_pmtiles_prefix)
-
-        print('creating tiles for current level')
-        create_upper_tiles(z, curr_affected_tiles, tiles_dir, pool)
-
-        print('removing unwanted child tiles')
-        delete_unwanted_tiles(prev_affected_tiles, z+1, tiles_dir)
-
-        prev_affected_tiles = curr_affected_tiles
-
-    print('All Done!!!')
+    return sheets_to_pull, affected_base_tiles
 
 def cli():
 
@@ -325,20 +388,30 @@ def cli():
     parser = argparse.ArgumentParser()
     parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
     parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
-    parser.add_argument('--min-zoom', type=int, help='Minimum zoom level to create tiles for')
-    parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for')
+    parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for, needed only when --from-source is not provided')
     parser.add_argument('--sheets-to-pull-list-outfile', default=None,
                         help='Output into which we write the list of sheet that need to be pulled, if set, the script ends after it created the list file')
-    parser.add_argument('--from-pmtiles-prefix', help='Prefix to the PMTiles source from which we pull tiles, if needs to be set when --sheets-to-pull-list-outfile is not set')
+    parser.add_argument('--from-source', help='location of the source from which we pull tiles, can be a glob pattern to match a group of pmtiles, it needs to be set when --sheets-to-pull-list-outfile is not set')
     parser.add_argument('--tiles-dir', help='Directory where the tiles will be created')
     parser.add_argument('--tiffs-dir', help='Directory where the tiffs are present')
     parser.add_argument('--num-parallel', type=int, default=cpu_count(), help='Number of parallel processes to use for tiling (default: number of CPU cores)')
+    parser.add_argument('--tile-quality', default=75, help='quality of compression for webp and jpg (default: 75)')
 
     args = parser.parse_args()
+
+    retile_list_file = Path(args.retile_list_file)
+    if not retile_list_file.exists():
+        parser.error(f'Retile list file {args.retile_list_file} does not exist')
+
+    bounds_file = Path(args.bounds_file)
+    if not bounds_file.exists():
+        parser.error(f'Bounds file {args.bounds_file} does not exist')
+
+
     if not args.sheets_to_pull_list_outfile:
         missing = []
-        if not args.from_pmtiles_prefix:
-            missing.append('--from-pmtiles-prefix')
+        if not args.from_source:
+            missing.append('--from-source')
         if not args.tiles_dir:
             missing.append('--tiles-dir')
         if not args.tiffs_dir:
@@ -347,12 +420,38 @@ def cli():
         if missing:
             parser.error(f"The following arguments are required when --sheets-to-pull-list-outfile is not provided: {', '.join(missing)}")
 
-    if args.from_pmtiles_prefix is None:
+    if args.from_source is None:
         if not args.max_zoom:
-            parser.error('--max-zoom is required when --from-pmtiles-prefix is not set')
+            parser.error('--max-zoom is required when --from-source is not set')
 
-        if not args.min_zoom:
-            parser.error('--min-zoom is required when --from-pmtiles-prefix is not set')
+        orig_source = None
+        max_zoom = args.max_zoom
+    else:
+        try:
+            orig_source = create_source_from_paths([args.from_source])
+        except ValueError as e:
+            parser.error(f'Error creating tile source from {args.from_source}: {e}')
+
+        max_zoom = orig_source.max_zoom
+        if args.max_zoom is not None:
+            print(f'--max-zoom argument is ignored when --from-source is set, using max zoom from original source: {max_zoom}')
+
+    # calculate the sheets to pull and affected base tiles
+    sheets_to_pull, affected_base_tiles = assess_sheet_requirements(retile_list_file, bounds_file, max_zoom)
+
+    if args.sheets_to_pull_list_outfile is not None:
+        Path(args.sheets_to_pull_list_outfile).write_text('\n'.join(sheets_to_pull) + '\n')
+        print(f'Wrote sheets to pull to {args.sheets_to_pull_list_outfile}.. exiting')
+        return
+
+    tiffs_dir = Path(args.tiffs_dir)
+    tiles_dir = Path(args.tiles_dir)
+
+    print('check the sheets availability')
+    check_sheets(sheets_to_pull, tiffs_dir)
+
+    metadata = orig_source.get_metadata()
+    tile_extension = metadata['format']
 
     os.environ['GDAL_CACHEMAX'] = '2048'
     os.environ['GDAL_MAX_DATASET_POOL_SIZE'] = '5000'
@@ -360,12 +459,16 @@ def cli():
     #os.environ['VRT_SHARED_SOURCE'] = '1'
     #os.environ['GTIFF_VIRTUAL_MEM_IO'] = 'TRUE'
     with DividedCache(args.num_parallel), Pool(processes=args.num_parallel) as pool:
-        retile(args, pool)
+
+        tiler = Tiler(tiles_dir,
+                      tiffs_dir, 
+                      orig_source, 
+                      tile_extension,
+                      args.tile_quality,
+                      pool)
+        tiler.retile(sheets_to_pull, affected_base_tiles)
+
     return 0
 
-
 if __name__ == '__main__':
-    sys.exit(cli())
-
-
-
+    cli()
