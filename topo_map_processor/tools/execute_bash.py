@@ -1,6 +1,7 @@
-import subprocess
+import os
 import sys
 import shutil
+import subprocess
 import importlib.resources as resources
 
 def execute_bash_script(script_name):
@@ -18,6 +19,8 @@ def execute_bash_script(script_name):
     except FileNotFoundError:
         raise FileNotFoundError(f"The script {script_name} does not exist or is not a file. Searched in package data.")
 
+    command_name = sys.argv[0]
+    os.environ["COMMAND_NAME"] = command_name
     # Execute the bash script and stream output, merging stderr into stdout
     process = subprocess.Popen(
         [shutil.which("bash"), str(script_path)] + sys.argv[1:],

@@ -1,10 +1,11 @@
 #!/bin/bash
 
+prog_name=${COMMNAND_NAME:-$(basename "$0")}
 release_base=$1
 ext=$2
 
 if [ -z "$release_base" ] || [ -z "$ext" ]; then
-  echo "Usage: $0 <release_base> <extension>"
+  echo "Usage: $prog_name <release_base> <extension>"
   exit 1
 fi
 

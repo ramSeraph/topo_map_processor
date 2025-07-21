@@ -11,9 +11,10 @@ set -o pipefail
 # TAG: The git tag of the release to upload to.
 # FOLDER: The local folder containing the files to upload.
 # OVERWRITE: Optional. Set to 'yes' to allow overwriting existing assets.
+prog_name=${COMMNAND_NAME:-$(basename "$0")}
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-    echo "Usage: $0 <tag> <folder> <extension_without_the_leading_dot> [yes_to_overwrite]"
+    echo "Usage: $prog_name <tag> <folder> <extension_without_the_leading_dot> [yes_to_overwrite]"
     exit 1
 fi
 
