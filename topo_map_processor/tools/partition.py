@@ -357,10 +357,15 @@ def create_pmtiles(partition_info, reader, to_pmtiles_prefix):
         if format_string == "jpg":
             format_string = "jpeg"
 
-        is_vector_tiles = format_string == "pbf"
+        is_vector_tiles = (format_string == "pbf")
+
+        if is_vector_tiles or src_metadata.get('compression', None) == "gzip":
+            tile_compression = Compression.GZIP
+        else:
+            tile_compression = Compression.NONE
 
         header = {
-            "tile_compression": Compression.GZIP if is_vector_tiles else Compression.NONE,
+            "tile_compression": tile_compression,
             "min_lon_e7": int(min_lons[suffix] * 10000000),
             "min_lat_e7": int(min_lats[suffix] * 10000000),
             "max_lon_e7": int(max_lons[suffix] * 10000000),

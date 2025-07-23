@@ -199,7 +199,7 @@ class MBTilesSource:
             all_metadata[k] = v
 
         metadata = {}
-        for k in ['type', 'format', 'attribution', 'description', 'name', 'version', 'vector_layers', 'maxzoom', 'minzoom']:
+        for k in ['type', 'format', 'attribution', 'description', 'name', 'version', 'vector_layers', 'maxzoom', 'minzoom', 'compression']:
             if k not in all_metadata:
                 continue
             metadata[k] = all_metadata[k]

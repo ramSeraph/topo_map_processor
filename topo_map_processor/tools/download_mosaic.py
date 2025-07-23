@@ -191,6 +191,18 @@ def cli():
 
     mosaic_fname = get_filename_from_url(mosaic_url)
 
+    global session, timeout
+    session = requests.session()
+    retries = args.num_http_retries
+    retry = Retry(
+        total=retries,
+        read=retries,
+        connect=retries,
+    )
+    session.mount('http://', HTTPAdapter(max_retries=retry))
+    session.mount('https://', HTTPAdapter(max_retries=retry))
+    timeout = args.request_timeout_secs
+
     mosaic_file = Path(mosaic_fname)
     mosaic_data = get_mosaic(mosaic_file, mosaic_url)
     metadata = get_metadata(mosaic_data)
@@ -221,24 +233,14 @@ def cli():
         initialize_tables(cursor, metadata)
         mark_done(tracker_file, 'table_init')
 
-    global session, timeout
-    session = requests.session()
-    retries = args.num_http_retries
-    retry = Retry(
-        total=retries,
-        read=retries,
-        connect=retries,
-    )
-    session.mount('http://', HTTPAdapter(max_retries=retry))
-    session.mount('https://', HTTPAdapter(max_retries=retry))
-    timeout = args.request_timeout_secs
-
     for k in mosaic_data.keys():
         pmtiles_url = get_pmtiles_url(mosaic_url, k)
         if stage_done(tracker_file, k):
             continue
 
         pmtiles_fname = get_filename_from_url(pmtiles_url)
+        if Path(pmtiles_fname).exists():
+            raise Exception(f'{pmtiles_fname} already exists, delete existing file to continue')
         download_file(pmtiles_url, pmtiles_fname)
         add_to_mbtiles(pmtiles_fname, cursor, conn)
         mark_done(tracker_file, k)
