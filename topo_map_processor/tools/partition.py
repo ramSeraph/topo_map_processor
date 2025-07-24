@@ -298,7 +298,7 @@ def create_pmtiles(partition_info, reader, to_pmtiles_prefix):
             tiles_to_suffix_idx[t] = i
         i += 1
 
-    curr_zs = {}
+    curr_low_zs = {}
     max_lats = {}
     min_lats = {}
     max_lons = {}
@@ -306,7 +306,7 @@ def create_pmtiles(partition_info, reader, to_pmtiles_prefix):
     min_zooms = {}
     max_zooms = {}
     for suffix in suffix_arr:
-        curr_zs[suffix] = None
+        curr_low_zs[suffix] = None
         max_lats[suffix] = min_lats[suffix] = max_lons[suffix] = min_lons[suffix] = None
         min_zooms[suffix] = max_zooms[suffix] = None
 
@@ -319,21 +319,21 @@ def create_pmtiles(partition_info, reader, to_pmtiles_prefix):
         suffix = suffix_arr[tiles_to_suffix_idx[t]]
         writer = writers[suffix]
 
-        if curr_zs[suffix] is None or curr_zs[suffix] < t.z:
+        if curr_low_zs[suffix] is None or curr_low_zs[suffix] > t.z:
             max_lats[suffix] = min_lats[suffix] = max_lons[suffix] = min_lons[suffix] = None
-            curr_zs[suffix] = t.z
+            curr_low_zs[suffix] = t.z
 
         t_bounds = mercantile.bounds(t)
-        if curr_zs[suffix] == t.z and (max_lats[suffix] is None or t_bounds.north > max_lats[suffix]):
+        if curr_low_zs[suffix] == t.z and (max_lats[suffix] is None or t_bounds.north > max_lats[suffix]):
             max_lats[suffix] = t_bounds.north
 
-        if curr_zs[suffix] == t.z and (min_lats[suffix] is None or t_bounds.south < min_lats[suffix]):
+        if curr_low_zs[suffix] == t.z and (min_lats[suffix] is None or t_bounds.south < min_lats[suffix]):
             min_lats[suffix] = t_bounds.south
 
-        if curr_zs[suffix] == t.z and (max_lons[suffix] is None or t_bounds.east > max_lons[suffix]):
+        if curr_low_zs[suffix] == t.z and (max_lons[suffix] is None or t_bounds.east > max_lons[suffix]):
             max_lons[suffix] = t_bounds.east
 
-        if curr_zs[suffix] == t.z and (min_lons[suffix] is None or t_bounds.west < min_lons[suffix]):
+        if curr_low_zs[suffix] == t.z and (min_lons[suffix] is None or t_bounds.west < min_lons[suffix]):
             min_lons[suffix] = t_bounds.west
                         
         if min_zooms[suffix] is None or min_zooms[suffix] > t.z:
