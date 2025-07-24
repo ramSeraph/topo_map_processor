@@ -320,7 +320,7 @@ class StackedTileSource:
     def for_all_z(self, z):
         seen = set()
         for i, src in enumerate(self.srcs):
-            print(f'iterating over source {i} for {z}')
+            #print(f'iterating over source {i} for {z}')
             for (tile, size) in src.for_all_z(z):
                 if tile in seen:
                     continue
@@ -330,7 +330,7 @@ class StackedTileSource:
     def all(self):
         seen = set()
         for i, src in enumerate(self.srcs):
-            print(f'iterating over source {i} for all levels')
+            #print(f'iterating over source {i} for all levels')
             for (tile, data) in src.all():
                 if tile in seen:
                     continue
@@ -340,7 +340,7 @@ class StackedTileSource:
     def all_sizes(self):
         seen = set()
         for i, src in enumerate(self.srcs):
-            print(f'iterating over source {i} for all levels')
+            #print(f'iterating over source {i} for all levels')
             for (tile, size) in src.all_sizes():
                 if tile in seen:
                     continue
