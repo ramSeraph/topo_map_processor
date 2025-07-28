@@ -81,10 +81,6 @@ for release in $RELEASES_TO_PROCESS; do
   fi
 done
 
-if [ -z "$EXISTING_ASSETS_WITH_RELEASES" ]; then
-    echo "Could not fetch any assets. This could mean the releases do not have assets, or you lack permissions."
-fi
-
 # Determine available releases and their current asset counts
 AVAILABLE_RELEASES=()
 AVAILABLE_ASSET_COUNTS=()
@@ -107,8 +103,11 @@ echo "Starting upload process from folder '$FOLDER'..."
 # Find all files in the folder that are not yet in any release and loop through them.
 find "${FOLDER}" -type f | grep "^.*\.${EXT}$" | while read -r FILE_PATH; do
     FILENAME=$(basename "$FILE_PATH")
+    echo "Processing file: $FILENAME"
 
+    set +o pipefail
     RELEASE_FOR_ASSET=$(echo -n "$EXISTING_ASSETS_WITH_RELEASES" | grep "^${FILENAME} " | head -n 1 | awk '{print $2}')
+    set -o pipefail
 
     if [ -n "$RELEASE_FOR_ASSET" ]; then
         # Asset exists
