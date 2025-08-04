@@ -53,5 +53,7 @@ def upload_to_release():
     execute_bash_script("upload_to_release.sh")
 
 
+
+
 if __name__ == "__main__":
     generate_lists()

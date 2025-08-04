@@ -44,6 +44,7 @@ retile = "topo_map_processor.tools.retile:cli"
 tile = "topo_map_processor.tools.tile:cli"
 generate-lists = "topo_map_processor.tools.execute_bash:generate_lists"
 upload-to-release = "topo_map_processor.tools.execute_bash:upload_to_release"
+retile-e2e = "topo_map_processor.tools.retile_e2e:cli"
 
 
 [build-system]

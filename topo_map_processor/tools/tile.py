@@ -12,6 +12,8 @@ from multiprocessing import set_start_method, cpu_count
 
 from osgeo_utils.gdal2tiles import submain as gdal2tiles_main
 
+SUPPORTED_FORMATS = ['webp', 'jpeg', 'png']
+
 def run_external(cmd):
     print(f'running cmd - {cmd}')
     start = time.time()
@@ -41,7 +43,7 @@ def get_tiler_cmd_params(tile_extension, tile_quality):
             '--webp-quality', str(tile_quality),
         ]
 
-    if tile_extension in ['jpg', 'jpeg']:
+    if tile_extension == 'jpeg':
         return [
             '--tiledriver', 'JPEG',
             '--jpeg_quality', str(tile_quality),
@@ -52,7 +54,7 @@ def get_tiler_cmd_params(tile_extension, tile_quality):
             '--tiledriver', 'PNG',
         ]
 
-    raise ValueError(f'Unsupported tile extension: {tile_extension}')
+    raise ValueError(f'Unsupported tile extension: {tile_extension}, {SUPPORTED_FORMATS=}')
 
 
 
@@ -65,7 +67,7 @@ def cli():
     parser.add_argument('--tiffs-dir', required=True, help='Directory with GTiffs to tile')
     parser.add_argument('--max-zoom', type=int, required=True, help='Maximum zoom level for tiling')
     parser.add_argument('--min-zoom', type=int, default=0, help='Minimum zoom level for tiling')
-    parser.add_argument('--tile-extension', type=str, default='webp', choices=['webp', 'jpg', 'jpeg', 'png'], help='Tile file extension (default: webp)')
+    parser.add_argument('--tile-extension', type=str, default='webp', choices=SUPPORTED_FORMATS, help='Tile file extension (default: webp)')
     parser.add_argument('--tile-quality', type=int, default=75, help='Compression quality of the tiles (default: 75)')
     parser.add_argument('--num-parallel', type=int, default=cpu_count(), help='Number of parallel processes to use for tiling (default: number of CPU cores)')
     parser.add_argument('--name', required=True, help='Name of the mosaic.')
@@ -119,7 +121,6 @@ def cli():
         '--resume', 
         '--xyz', 
         '--processes', f'{args.num_parallel}', 
-        '--processes=8', 
         '-z', f'{args.min_zoom}-{args.max_zoom}',
     ] + get_tiler_cmd_params(args.tile_extension, args.tile_quality) + [
         str(vrt_file), str(tiles_dir)
@@ -129,10 +130,6 @@ def cli():
     vrt_file.unlink()
 
     metadata_file = tiles_dir / 'tiles.json'
-    if args.tile_extension == 'jpg':
-        format = 'jpeg'
-    else:
-        format = args.tile_extension
 
     # it is not really a proper tilejson spec.. it is the basic things needed to populate a pmtiles metadata
     metadata = {

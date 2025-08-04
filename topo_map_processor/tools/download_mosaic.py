@@ -19,9 +19,13 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
 from pmtiles.reader import Reader, MmapSource, all_tiles
+from pmtiles.writer import Writer
+from pmtiles.tile import Compression
 
 # heavily copied from https://github.com/protomaps/PMTiles/blob/main/python/pmtiles/convert.py
 # and https://github.com/mapbox/mbutil/blob/master/mbutil/util.py
+
+# TODO: double check the compression related stuff
 
 session = None
 timeout = None
@@ -41,25 +45,7 @@ def get_mosaic(mosaic_file, mosaic_url):
 
     return json.loads(mosaic_file.read_text())
 
-
-def get_metadata(mosaic_data):
-    ch = {}
-
-    cm = list(mosaic_data.values())[0]['metadata']
-    for k, item in mosaic_data.items():
-        h = item['header']
-        if 'max_zoom' not in ch or ch['max_zoom'] < h['max_zoom']:
-            ch['max_zoom'] = h['max_zoom']
-        if 'min_zoom' not in ch or ch['min_zoom'] > h['min_zoom']:
-            ch['min_zoom'] = h['min_zoom']
-        if 'max_lat_e7' not in ch or ch['max_lat_e7'] < h['max_lat_e7']:
-            ch['max_lat_e7'] = h['max_lat_e7']
-        if 'min_lat_e7' not in ch or ch['min_lat_e7'] > h['min_lat_e7']:
-            ch['min_lat_e7'] = h['min_lat_e7']
-        if 'max_lon_e7' not in ch or ch['max_lon_e7'] < h['max_lon_e7']:
-            ch['max_lon_e7'] = h['max_lon_e7']
-        if 'min_lon_e7' not in ch or ch['min_lon_e7'] > h['min_lon_e7']:
-            ch['min_lon_e7'] = h['min_lon_e7']
+def enhance_metadata(cm, ch):
 
     cm['maxzoom'] = ch['max_zoom']
     cm['minzoom'] = ch['min_zoom']
@@ -70,17 +56,53 @@ def get_metadata(mosaic_data):
     min_lon = ch['min_lon_e7'] / 10000000
     cm['bounds'] = f"{min_lon},{min_lat},{max_lon},{max_lat}"
 
-    center_lat = (max_lat + min_lat) / 2
-    center_lon = (max_lon + min_lon) / 2 
-    center_zoom = (ch['max_zoom'] + ch['min_zoom']) // 2
+    center_lat = ch['center_lat_e7'] / 10000000
+    center_lon = ch['center_lon_e7'] / 10000000
+    center_zoom = ch['center_zoom']
     cm['center'] = f"{center_lon},{center_lat},{center_zoom}"
 
-    vector_layers = cm.get('vector_layers', [])
-    for layer in vector_layers:
-        layer['minzoom'] = cm['minzoom']
-        layer['maxzoom'] = cm['maxzoom']
+    compression = ch['compression']
+    cm['compression'] = compression.name.lower() if isinstance(compression, Compression) else compression
 
-    return cm
+
+def collect_header(items):
+    ch = {}
+    for item in items:
+        h = item['header']
+        if 'max_zoom' not in ch or ch['max_zoom'] < h['max_zoom']:
+            ch['max_zoom'] = h['max_zoom']
+        if 'min_zoom' not in ch or ch['min_zoom'] > h['min_zoom']:
+            ch['min_zoom'] = h['min_zoom']
+
+        if 'max_lat_e7' not in ch or ch['max_lat_e7'] < h['max_lat_e7']:
+            ch['max_lat_e7'] = h['max_lat_e7']
+        if 'min_lat_e7' not in ch or ch['min_lat_e7'] > h['min_lat_e7']:
+            ch['min_lat_e7'] = h['min_lat_e7']
+        if 'max_lon_e7' not in ch or ch['max_lon_e7'] < h['max_lon_e7']:
+            ch['max_lon_e7'] = h['max_lon_e7']
+        if 'min_lon_e7' not in ch or ch['min_lon_e7'] > h['min_lon_e7']:
+            ch['min_lon_e7'] = h['min_lon_e7']
+
+        ch['compression'] = h.get('compression', Compression.NONE)
+
+    ch['center_lat_e7'] = (ch['max_lat_e7'] + ch['min_lat_e7']) // 2
+    ch['center_lon_e7'] = (ch['max_lon_e7'] + ch['min_lon_e7']) // 2
+    ch['center_zoom'] = (ch['max_zoom'] + ch['min_zoom']) // 2
+
+    return ch
+
+def get_metadata_and_header(mosaic_data, mosaic_version, archive_type):
+    if mosaic_version != 0:
+        metadata = mosaic_data['metadata']
+        header = mosaic_data['header']
+    else:
+        metadata = list(mosaic_data.values())[0]['metadata']
+        header = collect_header(mosaic_data.values())
+
+    if archive_type == 'mbtiles':
+        enhance_metadata(metadata, header)
+
+    return metadata, header
 
 
 def finalize_mbtiles(conn, cursor):
@@ -107,6 +129,13 @@ def add_to_mbtiles(pmtiles_fname, cursor, conn):
             )
         conn.commit()
 
+def add_to_pmtiles(pmtiles_fname, writer):
+    print(f'adding {pmtiles_fname} to pmtiles')
+    with open(pmtiles_fname, "r+b") as f:
+        source = MmapSource(f)
+        reader = Reader(source)
+        for zxy, tile_data in all_tiles(reader.get_bytes):
+            writer.write_tile(zxy[0], zxy[1], zxy[2], tile_data)
 
 def optimize_cursor(cursor):
     cursor.execute("""PRAGMA synchronous=0""")
@@ -147,9 +176,8 @@ def get_mbtiles_conn(output_file):
     return conn, cursor
 
 
-def get_pmtiles_url(mosaic_url, k):
-    # undo prioir ididocy
-    if k.startswith('../') and mosaic_url.startswith('https://github.com/ramSeraph/'):
+def get_pmtiles_url(mosaic_url, k, version):
+    if version == 0 and k.startswith('../'):
         k = k[3:]
     return urljoin(mosaic_url, k)
 
@@ -180,16 +208,42 @@ def get_filename_from_url(url):
 
 def cli():
     import argparse
-    parser = argparse.ArgumentParser(description='Download a mosaic and convert it to MBTiles format.')
-    parser.add_argument('--mosaic_url',  '-u', required=True, type=str, help='URL of the mosaic JSON file')
-    parser.add_argument('--output_file', '-o', type=str, help='Output MBTiles file name, if not specified is derived from the mosaic URL')
+    parser = argparse.ArgumentParser(description='Download a mosaic and convert it to MBTiles or PMTiles format.')
+    parser.add_argument('--mosaic-url',  '-u', required=True, type=str, help='URL of the mosaic JSON file')
+    parser.add_argument('--output-file', '-o', type=str, help='Output MBTiles/PMTiles file name. The format is inferred from the extension.')
+    parser.add_argument('--archive-type', choices=['mbtiles', 'pmtiles'], help='Type of archive to create. Required if --output-file is not provided.')
     parser.add_argument('--request-timeout-secs', '-t', type=int, default=60, help='Timeout for HTTP requests in seconds')
     parser.add_argument('--num-http-retries', '-r', type=int, default=3, help='Number of retries for HTTP requests')
     args = parser.parse_args()
 
     mosaic_url = args.mosaic_url
-
     mosaic_fname = get_filename_from_url(mosaic_url)
+
+    archive_type = args.archive_type
+    output_file = None
+
+    if args.output_file:
+        output_file = Path(args.output_file)
+        if output_file.suffix == '.mbtiles':
+            if archive_type and archive_type != 'mbtiles':
+                raise ValueError("Output file extension is .mbtiles but --archive-type is not 'mbtiles'")
+            archive_type = 'mbtiles'
+        elif output_file.suffix == '.pmtiles':
+            if archive_type and archive_type != 'pmtiles':
+                raise ValueError("Output file extension is .pmtiles but --archive-type is not 'pmtiles'")
+            archive_type = 'pmtiles'
+        else:
+            raise ValueError("If --output-file is provided, it must have a .mbtiles or .pmtiles extension.")
+
+    if not archive_type:
+        raise ValueError("You must specify either --output-file (with .mbtiles or .pmtiles extension) or --archive-type.")
+
+    if not output_file:
+        if not mosaic_fname.endswith('.mosaic.json'):
+            raise ValueError('Input mosaic URL must point to a file ending with .mosaic.json if --output-file is not specified.')
+        
+        out_fname = mosaic_fname[:-len('.mosaic.json')] + '.' + archive_type
+        output_file = Path(out_fname)
 
     global session, timeout
     session = requests.session()
@@ -205,36 +259,35 @@ def cli():
 
     mosaic_file = Path(mosaic_fname)
     mosaic_data = get_mosaic(mosaic_file, mosaic_url)
-    metadata = get_metadata(mosaic_data)
-
-    if args.output_file:
-        out_mbtiles_file = Path(args.output_file)
-    else:
-        if not mosaic_fname.endswith('.mosaic.json'):
-            raise ValueError('Output file must end with .mosaic.json, if the output_file is not specified.')
-
-        out_mbtiles_fname = mosaic_fname[:-len('.mosaic.json')] + '.mbtiles'
-        out_mbtiles_file = Path(out_mbtiles_fname)
+    mosaic_version = mosaic_data.get('version', 0)
+    metadata, header = get_metadata_and_header(mosaic_data, mosaic_version, archive_type)
 
     tracker_file = Path('tracker.txt')
 
-    if out_mbtiles_file.exists() and not tracker_file.exists():
-        print(f'Output file {out_mbtiles_file} already exists, and no tracker file found. Exiting to avoid overwriting.')
+    if output_file.exists() and not tracker_file.exists():
+        print(f'Output file {output_file} already exists, and no tracker file found. Exiting to avoid overwriting.')
         return
-
-    conn, cursor = get_mbtiles_conn(out_mbtiles_file)
 
     init_tracker(tracker_file)
 
-    print(f'Output MBTiles file: {out_mbtiles_file}')
+    print(f'Output file: {output_file}')
 
-    if not stage_done(tracker_file, 'table_init'):
-        print('Initializing tables...')
-        initialize_tables(cursor, metadata)
-        mark_done(tracker_file, 'table_init')
+    writer = None
+    conn = None
+    cursor = None
 
-    for k in mosaic_data.keys():
-        pmtiles_url = get_pmtiles_url(mosaic_url, k)
+    if archive_type == 'mbtiles':
+        conn, cursor = get_mbtiles_conn(output_file)
+        if not stage_done(tracker_file, 'table_init'):
+            print('Initializing tables...')
+            initialize_tables(cursor, metadata)
+            mark_done(tracker_file, 'table_init')
+    elif archive_type == 'pmtiles':
+        writer = Writer(open(output_file, 'wb'))
+
+    slice_data = mosaic_data if mosaic_version == 0 else mosaic_data.get('slices', {})
+    for k in slice_data.keys():
+        pmtiles_url = get_pmtiles_url(mosaic_url, k, mosaic_version)
         if stage_done(tracker_file, k):
             continue
 
@@ -242,11 +295,21 @@ def cli():
         if Path(pmtiles_fname).exists():
             raise Exception(f'{pmtiles_fname} already exists, delete existing file to continue')
         download_file(pmtiles_url, pmtiles_fname)
-        add_to_mbtiles(pmtiles_fname, cursor, conn)
+        
+        if archive_type == 'mbtiles':
+            add_to_mbtiles(pmtiles_fname, cursor, conn)
+        else:
+            add_to_pmtiles(pmtiles_fname, writer)
+
         mark_done(tracker_file, k)
         Path(pmtiles_fname).unlink()
 
-    finalize_mbtiles(conn, cursor)
+    if archive_type == 'mbtiles':
+        finalize_mbtiles(conn, cursor)
+    else:
+        print("Finalizing pmtiles archive...")
+        writer.finalize(header, metadata)
+
     tracker_file.unlink()
     mosaic_file.unlink()
     print('Done!!!')
@@ -254,3 +317,4 @@ def cli():
 
 if __name__ == '__main__':
     cli()
+

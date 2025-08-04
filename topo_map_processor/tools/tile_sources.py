@@ -22,6 +22,11 @@ from pmtiles.tile import (
 class MissingTileError(Exception):
     pass
 
+INTERESTED_METADATA_KEYS = [
+    'type', 'format', 'attribution', 'description', 'name', 
+    'version', 'vector_layers', 'compression'
+]
+
 class DiskTilesSource:
     def __init__(self, directory):
         self.dir = Path(directory)
@@ -101,7 +106,7 @@ class DiskTilesSource:
     def get_tilejson_file(self):
         return self.dir / 'tiles.json'
 
-    def get_metadata(self):
+    def get_full_metadata(self):
         tilejson_file = self.get_tilejson_file()
 
         if not tilejson_file.exists():
@@ -109,19 +114,35 @@ class DiskTilesSource:
 
         return json.loads(tilejson_file.read_text())
 
+    # this is supposed to match what is expected in a pmtiles metadata dict
+    def get_metadata(self):
+        full_metadata = self.get_full_metadata()
+
+        metadata = {}
+        # ensure we have the keys we are interested in
+        for key in INTERESTED_METADATA_KEYS:
+            if key in full_metadata:
+                metadata[key] = full_metadata[key]
+
+        return metadata
+
     @property
     def min_zoom(self):
         try:
-            metadata = self.get_metadata()
-            return metadata['minzoom']
+            full_metadata = self.get_full_metadata()
+            return full_metadata['minzoom']
+        except KeyError:
+            pass
         except ValueError:
             return self.get_min_zoom()
  
     @property
     def max_zoom(self):
         try:
-            metadata = self.get_metadata()
-            return metadata['maxzoom']
+            full_metadata = self.get_full_metadata()
+            return full_metadata['maxzoom']
+        except KeyError:
+            pass
         except ValueError:
             return self.get_max_zoom()
 
@@ -129,7 +150,7 @@ class DiskTilesSource:
 class MBTilesSource:
     def __init__(self, fname):
         self.con = sqlite3.connect(fname)
-        self._metadata = None
+        self._full_metadata = None
 
     def _to_xyz(self, x, y, z):
         y = (1 << z) - 1 - y
@@ -183,9 +204,9 @@ class MBTilesSource:
     def cleanup(self):
         self.con.close()
 
-    def get_metadata(self):
-        if self._metadata is not None:
-            return self._metadata
+    def get_full_metadata(self):
+        if self._full_metadata is not None:
+            return self._full_metadata
 
         all_metadata = {}
         for row in self.con.execute("SELECT name,value FROM metadata"):
@@ -198,19 +219,25 @@ class MBTilesSource:
                 continue
             all_metadata[k] = v
 
-        metadata = {}
-        for k in ['type', 'format', 'attribution', 'description', 'name', 'version', 'vector_layers', 'maxzoom', 'minzoom', 'compression']:
-            if k not in all_metadata:
-                continue
-            metadata[k] = all_metadata[k]
+        self._full_metadata = all_metadata
+        return self._full_metadata
 
-        self._metadata = metadata
-        return self._metadata
+    def get_metadata(self):
+        full_metadata = self.get_full_metadata()
+
+        metadata = {}
+        for k in INTERESTED_METADATA_KEYS:
+            if k not in full_metadata:
+                continue
+            metadata[k] = full_metadata[k]
+
+        return metadata
+
             
     def _get_meta_prop(self, prop_name):
-        metadata = self.get_metadata()
-        if prop_name in metadata:
-            return metadata[prop_name]
+        full_metadata = self.get_full_metadata()
+        if prop_name in full_metadata:
+            return full_metadata[prop_name]
 
         raise ValueError(f"Source does not have a {prop_name} property.")
 
@@ -289,11 +316,6 @@ class PMTilesSource:
     def get_metadata(self):
         return self.reader.metadata()
 
-    def _get_meta_prop(self, prop_name):
-        metadata = self.reader.metadata()
-        if prop_name in metadata:
-            return metadata[prop_name]
-        raise ValueError(f"Source does not have a {prop_name} property.")
 
  
 # hybrid source that combines multiple tile sources in order
@@ -380,16 +402,47 @@ class StackedTileSource:
         return max(max_zooms)
 
     def get_metadata(self):
-        metadata = None
+        combined_metadata = {}
+        metadatas = []
         for src in self.srcs:
             try:
                 metadata = src.get_metadata()
-                return metadata
+                metadatas.append(metadata)
             except ValueError:
+                metadatas.append({})
                 continue
-        if metadata is None:
+        all_empty = all([not metadata for metadata in metadatas])
+        if all_empty:
             raise ValueError("No metadata found in any of the sources.")
-        return metadata
+
+        for key in INTERESTED_METADATA_KEYS:
+            if key == 'vector_layers':
+                continue
+
+            for metadata in metadatas:
+                if key in metadata:
+                    combined_metadata[key] = metadata[key]
+                    break
+
+        # handle vector layers separately
+        all_vector_layers = {}
+        for metadata in metadatas:
+            vector_layers = metadata.get('vector_layers', [])
+            for v in vector_layers:
+                v_id = v['id']
+                if v_id not in all_vector_layers:
+                    all_vector_layers[v_id] = v
+                else:
+                    existing = all_vector_layers[v_id]
+                    if existing['minzoom'] > v['minzoom']:
+                        existing['minzoom'] = v['minzoom']
+                    if existing['maxzoom'] < v['maxzoom']:
+                        existing['maxzoom'] = v['maxzoom']
+
+        if all_vector_layers:
+            combined_metadata['vector_layers'] = list(all_vector_layers.values())
+
+        return combined_metadata
 
         
 def create_source_from_paths(source_paths):

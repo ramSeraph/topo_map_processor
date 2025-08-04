@@ -186,14 +186,15 @@ collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file
 
 #### `download-mosaic`
 
-Downloads a PMTiles mosaic and converts it to a single MBTiles file. A mosaic is a JSON file that lists multiple PMTiles files.
+Downloads a PMTiles mosaic and converts it to a single MBTiles or PMTiles file. A mosaic is a JSON file that lists multiple PMTiles files.
 
 ```bash
-download-mosaic --mosaic_url <url> [--output_file <file>] [--request-timeout-secs <seconds>] [--num-http-retries <retries>]
+download-mosaic --mosaic-url <url> [--output-file <file>] [--archive-type <type>] [--request-timeout-secs <seconds>] [--num-http-retries <retries>]
 ```
 
--   `--mosaic_url`, `-u`: URL of the mosaic JSON file. (Required)
--   `--output_file`, `-o`: Output MBTiles file name. If not specified, it is derived from the mosaic URL. (Optional)
+-   `--mosaic-url`, `-u`: URL of the mosaic JSON file. (Required)
+-   `--output-file`, `-o`: Output MBTiles/PMTiles file name. The format is inferred from the extension (`.mbtiles` or `.pmtiles`). If not specified, it is derived from the mosaic URL. (Optional)
+-   `--archive-type`: Type of archive to create (`mbtiles` or `pmtiles`). Required if `--output-file` is not provided or its extension is not recognized.
 -   `--request-timeout-secs`, `-t`: Timeout for HTTP requests in seconds (default: 60).
 -   `--num-http-retries`, `-r`: Number of retries for HTTP requests (default: 3).
 
@@ -236,7 +237,7 @@ retile --retile-list-file <file> --bounds-file <file> [--max-zoom <zoom>] [--tif
 -   `--from-source`: Location of the source from which to pull existing tiles. Can be a glob pattern to match a group of pmtiles. Required if not in pull-list generation mode.
 -   `--sheets-to-pull-list-outfile`: If provided, the script will only calculate the full list of sheets that need to be processed (including adjacent ones) and write it to this file, then exit.
 -   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
--   `--tile-quality`: Quality of compression for webp and jpg (default: 75).
+-   `--tile-quality`: Quality of compression for webp and jpeg (default: 75).
 
 #### `tile`
 
@@ -254,8 +255,8 @@ tile --tiles-dir <dir> --tiffs-dir <dir> --max-zoom <zoom> --name <name> --descr
 -   `--attribution`: Attribution text for the mosaic. Required if `--attribution-file` is not used.
 -   `--attribution-file`: File containing attribution text for the mosaic. Required if `--attribution` is not used.
 -   `--min-zoom`: Minimum zoom level for tiling (default: 0).
--   `--tile-extension`: Tile file extension (default: webp). Choices: `webp`, `jpg`, `jpeg`, `png`.
--   `--tile-quality`: Compression quality of the tiles for `webp` and `jpg` (default: 75).
+-   `--tile-extension`: Tile file extension (default: webp). Choices: `webp`, `jpeg`, `png`.
+-   `--tile-quality`: Compression quality of the tiles for `webp` and `jpeg` (default: 75).
 -   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
 
 ### Running Tools Directly with `uvx`

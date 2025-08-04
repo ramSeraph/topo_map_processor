@@ -142,7 +142,7 @@ class Tiler:
                 '--webp-quality', str(self.tile_quality),
             ]
 
-        if self.tile_extension == 'jpg':
+        if self.tile_extension == 'jpeg':
             return params + [
                 '--jpeg_quality', str(self.tile_quality),
             ]
@@ -156,7 +156,7 @@ class Tiler:
         if self.tile_extension == 'webp':
             return 'WEBP'
 
-        if self.tile_extension == 'jpg':
+        if self.tile_extension == 'jpeg':
             return 'JPEG'
 
         if self.tile_extension == 'png':
@@ -171,7 +171,7 @@ class Tiler:
                 'webp_lossless': False,
             }
 
-        if self.tile_extension == 'jpg':
+        if self.tile_extension == 'jpeg':
             return {
                 'jpeg_quality': self.tile_quality,
             }
@@ -308,7 +308,10 @@ class Tiler:
     
             prev_affected_tiles = curr_affected_tiles
     
-        self.disk_handler.save_metadata(self.orig_tile_source.get_metadata())
+        metadata = self.orig_tile_source.get_metadata()
+        metadata['minzoom'] = self.orig_tile_source.min_zoom
+        metadata['maxzoom'] = self.orig_tile_source.max_zoom
+        self.disk_handler.save_metadata(metadata)
         print('All Done!!!')
 
 
@@ -379,11 +382,7 @@ def assess_sheet_requirements(retile_list_file, bounds_file, max_zoom):
 
     return sheets_to_pull, affected_base_tiles
 
-def cli():
-
-    # I don't care.. this shit isn't worth thinking about
-    if sys.platform == 'darwin':
-        set_start_method('fork')
+def retile_main(args):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
@@ -395,9 +394,9 @@ def cli():
     parser.add_argument('--tiles-dir', help='Directory where the tiles will be created')
     parser.add_argument('--tiffs-dir', help='Directory where the tiffs are present')
     parser.add_argument('--num-parallel', type=int, default=cpu_count(), help='Number of parallel processes to use for tiling (default: number of CPU cores)')
-    parser.add_argument('--tile-quality', default=75, help='quality of compression for webp and jpg (default: 75)')
+    parser.add_argument('--tile-quality', default=75, help='quality of compression for webp and jpeg (default: 75)')
 
-    args = parser.parse_args()
+    args = parser.parse_args(args)
 
     retile_list_file = Path(args.retile_list_file)
     if not retile_list_file.exists():
@@ -452,6 +451,8 @@ def cli():
 
     metadata = orig_source.get_metadata()
     tile_extension = metadata['format']
+    if tile_extension == 'jpg':
+        tile_extension = 'jpeg'
 
     os.environ['GDAL_CACHEMAX'] = '2048'
     os.environ['GDAL_MAX_DATASET_POOL_SIZE'] = '5000'
@@ -469,6 +470,12 @@ def cli():
         tiler.retile(sheets_to_pull, affected_base_tiles)
 
     return 0
+
+def cli():
+    if sys.platform == 'darwin':
+        set_start_method('fork')
+
+    retile_main(sys.argv[1:])
 
 if __name__ == '__main__':
     cli()
