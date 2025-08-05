@@ -24,18 +24,21 @@ from .tile_sources import create_source_from_paths
 BASE_SIZE_FOR_DELTA = 2 * 1024 * 1024 * 1024 # 2GB
 BASE_DELTA = 5 * 1024 * 1024 # 5MB
 
-HEADER_EXPORT_KEYS = [
-    'tile_compression',
+SLICE_HEADER_EXPORT_KEYS = [
     'min_lon_e7',
     'min_lat_e7',
     'max_lon_e7',
     'max_lat_e7',
     'min_zoom',
     'max_zoom',
+]
+
+HEADER_EXPORT_KEYS = SLICE_HEADER_EXPORT_KEYS + [
     'center_zoom',
     'center_lon_e7',
     'center_lat_e7',
-    'tile_type'
+    'tile_type',
+    'tile_compression',
 ]
 
 def parse_size(size_str):
@@ -79,6 +82,17 @@ def parse_size(size_str):
         raise argparse.ArgumentTypeError(f"Calculated size is negative: {final_size} for {size_str}")
 
     return final_size
+
+def convert_header(header, filter_keys):
+    new_header = copy.copy(header)
+    new_header['tile_compression'] = header['tile_compression'].value
+    new_header['tile_type'] = header['tile_type'].value
+    header_keys = list(new_header.keys())
+    for k in header_keys:
+        if k not in filter_keys:
+            del new_header[k]
+    return new_header
+
 
 def get_pmtiles_file_name(to_pmtiles_prefix, suffix):
     if suffix == '':
@@ -439,21 +453,10 @@ class Partitioner:
             metadata = metadatas[i]
             writer.finalize(header, metadata)
 
-        def convert_header(header):
-            new_header = copy.copy(header)
-            new_header['tile_compression'] = header['tile_compression'].value
-            new_header['tile_type'] = header['tile_type'].value
-            header_keys = list(new_header.keys())
-            for k in header_keys:
-                if k not in HEADER_EXPORT_KEYS:
-                    del new_header[k]
-            pprint(new_header)
-            return new_header
-
         mosaic_data = {
             'version': 1,
             'metadata': full_metadata,
-            'header': convert_header(full_header),
+            'header': convert_header(full_header, HEADER_EXPORT_KEYS),
             'slices': {}
         }
 
@@ -461,10 +464,8 @@ class Partitioner:
             out_pmtiles_file = get_pmtiles_file_name(self.to_pmtiles_prefix, slice)
             key = Path(out_pmtiles_file).name
             header = headers[i]
-            metadata = metadatas[i]
             mosaic_data['slices'][key] = {
-                'header': convert_header(header),
-                'metadata': metadata
+                'header': convert_header(header, SLICE_HEADER_EXPORT_KEYS)
             }
 
         self.write_mosaic_file(mosaic_data)
