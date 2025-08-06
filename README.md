@@ -194,7 +194,7 @@ download-mosaic --mosaic-url <url> [--output-file <file>] [--archive-type <type>
 
 -   `--mosaic-url`, `-u`: URL of the mosaic JSON file. (Required)
 -   `--output-file`, `-o`: Output MBTiles/PMTiles file name. The format is inferred from the extension (`.mbtiles` or `.pmtiles`). If not specified, it is derived from the mosaic URL. (Optional)
--   `--archive-type`: Type of archive to create (`mbtiles` or `pmtiles`). Required if `--output-file` is not provided or its extension is not recognized.
+-   `--archive-type`, `-a`: Type of archive to create (`mbtiles` or `pmtiles`). Required if `--output-file` is not provided or its extension is not recognized.
 -   `--request-timeout-secs`, `-t`: Timeout for HTTP requests in seconds (default: 60).
 -   `--num-http-retries`, `-r`: Number of retries for HTTP requests (default: 3).
 
@@ -203,7 +203,7 @@ download-mosaic --mosaic-url <url> [--output-file <file>] [--archive-type <type>
 Partitions a large set of tiles into smaller PMTiles files. This is useful for managing large datasets, for example, to stay within file size limits for services like GitHub Releases. It creates a mosaic file if the output is partitioned into multiple files.
 
 ```bash
-partition --from-source <source> [--from-source <source> ...] --to-pmtiles <file> [--size-limit <limit>]
+partition --from-source <source> [--from-source <source> ...] --to-pmtiles <file> [--size-limit <limit>] [--no-cache]
 ```
 
 -   `--from-source`: Path to a source file or directory. Can be repeated. Supported sources:
@@ -215,7 +215,9 @@ partition --from-source <source> [--from-source <source> ...] --to-pmtiles <file
     -   `github_release`: 2GB limit
     -   `github_file`: 100MB limit
     -   `cloudflare_object`: 512MB limit
-    The overhead (delta) is scaled proportionally based on the `github_release` preset (2GB with 5MB overhead). Defaults to `github_release`.
+
+    Defaults to `github_release`.
+-   `--no-cache`: Disable caching of tiles locally. Caching is on by default to speed up processing, but can consume significant disk space.
 
 #### `retile`
 
