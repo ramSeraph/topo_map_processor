@@ -24,7 +24,7 @@ class MissingTileError(Exception):
 
 INTERESTED_METADATA_KEYS = [
     'type', 'format', 'attribution', 'description', 'name', 
-    'version', 'vector_layers', 'compression'
+    'version', 'vector_layers'
 ]
 
 class DiskTilesSource:
