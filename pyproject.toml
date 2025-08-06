@@ -9,7 +9,7 @@ authors = [
 ]
 dependencies = [
     "mercantile>=1.2.1",
-    "pmtiles>=3.4.1",
+    "pmtiles==3.4.1",
     "requests>=2.32.4",
     "shapely>=2.1.1",
 ]
@@ -39,6 +39,7 @@ repository = "https://github.com/ramSeraph/topo_map_processor.git"
 [project.scripts]
 collect-bounds = "topo_map_processor.tools.collect_bounds:cli"
 download-mosaic = "topo_map_processor.tools.download_mosaic:cli"
+partition = "topo_map_processor.tools.partition:cli"
 partition-basic = "topo_map_processor.tools.partition_basic:cli"
 retile = "topo_map_processor.tools.retile:cli"
 tile = "topo_map_processor.tools.tile:cli"
