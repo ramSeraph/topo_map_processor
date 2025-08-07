@@ -25,38 +25,10 @@ from pmtiles.tile import zxy_to_tileid, Compression, TileType
 # heavily copied from https://github.com/protomaps/PMTiles/blob/main/python/pmtiles/convert.py
 # and https://github.com/mapbox/mbutil/blob/master/mbutil/util.py
 
-class ArchiveWriter:
+class PmtilesArchiveWriter:
     def __init__(self, output_file):
-        self.output_file = output_file
-
-    def init(self):
-        raise NotImplementedError("This method should be overridden by subclasses")
-
-    def commit(self):
-        raise NotImplementedError("This method should be overridden by subclasses")
-
-    def add_to_archive(self, zxy, tile_data):
-        raise NotImplementedError("This method should be overridden by subclasses")
-
-    def add(self, pmtiles_fname):
-        print(f'adding {pmtiles_fname} to archive')
-        with open(pmtiles_fname, "r+b") as f:
-            source = MmapSource(f)
-            reader = Reader(source)
-    
-            for zxy, tile_data in all_tiles(reader.get_bytes):
-                self.add_to_archive(zxy, tile_data)
-
-            self.commit()
-
-    def finalize(self, metadata=None, header=None):
-        raise NotImplementedError("This method should be overridden by subclasses")
-
-
-class PmtilesArchiveWriter(ArchiveWriter):
-    def __init__(self, output_file):
-        super().__init__(output_file)
         self.pmtiles_writer = None
+        self.output_file = output_file
 
     def init(self):
         self.pmtiles_writer = Writer(open(self.output_file, 'wb'))
@@ -78,11 +50,11 @@ class PmtilesArchiveWriter(ArchiveWriter):
         self.pmtiles_writer.finalize(header, metadata)
 
 
-class MbtilesArchiveWriter(ArchiveWriter):
+class MbtilesArchiveWriter:
     def __init__(self, output_file):
-        super().__init__(output_file)
         self.conn = None
         self.cursor = None
+        self.output_file = output_file
 
     def init(self):
         self.conn = sqlite3.connect(self.output_file)
@@ -274,6 +246,19 @@ class Merger:
     
         return metadata, header
 
+    def add_pmtiles(self, pmtiles_fname):
+
+        print(f'adding {pmtiles_fname} to archive')
+        with open(pmtiles_fname, "r+b") as f:
+            source = MmapSource(f)
+            reader = Reader(source)
+    
+            for zxy, tile_data in all_tiles(reader.get_bytes):
+                self.archive_writer.add_to_archive(zxy, tile_data)
+
+            self.archive_writer.commit()
+
+
     def process(self):
         self.get_mosaic(self.mosaic_url)
         if 'version' in self.mosaic_data:
@@ -302,7 +287,7 @@ class Merger:
 
             self.download_file(pmtiles_url, pmtiles_file)
             
-            self.archive_writer.add(pmtiles_file)
+            self.add_pmtiles(pmtiles_file)
 
             self.mark_as_done(k)
 

@@ -309,8 +309,8 @@ class Tiler:
             prev_affected_tiles = curr_affected_tiles
     
         metadata = self.orig_tile_source.get_metadata()
-        metadata['minzoom'] = self.orig_tile_source.min_zoom
-        metadata['maxzoom'] = self.orig_tile_source.max_zoom
+        metadata['minzoom'] = min_zoom
+        metadata['maxzoom'] = max_zoom
         self.disk_handler.save_metadata(metadata)
         print('All Done!!!')
 
