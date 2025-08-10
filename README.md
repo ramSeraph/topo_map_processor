@@ -159,15 +159,6 @@ Similar to corner detection, the `locate_grid_lines` method can be implemented u
 
 -   **`get_grid_line_corrections`**: This method serves as a refinement step to improve accuracy. While the transformer provides a very close estimate, this function can correct for minor printing or scanning inaccuracies. For each projected grid intersection, it searches a small area in the actual image for the *true* intersection of printed lines, adjusting the point to match the visual data. This ensures that the lines targeted for removal are precisely the ones printed on the map.
 
-### Tile Sources
-
-The `topo_map_processor.tools.tile_sources` module provides classes for reading tiles from different sources.
-
--   `DiskTilesSource`: Reads tiles from a directory on the local disk.
--   `MBTilesSource`: Reads tiles from an MBTiles file.
--   `PMTilesSource`: Reads tiles from a PMTiles file.
--   `StackedTileSource`: Combines multiple tile sources (Disk, MBTiles, PMTiles) into a single logical source, allowing for seamless access across different storage types.
-
 ### Command-Line Tools
 
 This project provides several command-line tools to work with topographic maps. These tools are dynamically loaded, and you can get the most up-to-date usage information by running the tool with the `--help` flag.
@@ -183,41 +174,6 @@ collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file
 -   `--bounds-dir`: Directory containing GeoJSONL files. (Required)
 -   `--output-file`: Output GeoJSON file path. (Required)
 -   `--preexisting-file`: Pre existing GeoJSON file path. (Optional)
-
-#### `download-mosaic`
-
-Downloads a PMTiles mosaic and converts it to a single MBTiles or PMTiles file. A mosaic is a JSON file that lists multiple PMTiles files.
-
-```bash
-download-mosaic --mosaic-url <url> [--output-file <file>] [--archive-type <type>] [--request-timeout-secs <seconds>] [--num-http-retries <retries>]
-```
-
--   `--mosaic-url`, `-u`: URL of the mosaic JSON file. (Required)
--   `--output-file`, `-o`: Output MBTiles/PMTiles file name. The format is inferred from the extension (`.mbtiles` or `.pmtiles`). If not specified, it is derived from the mosaic URL. (Optional)
--   `--archive-type`, `-a`: Type of archive to create (`mbtiles` or `pmtiles`). Required if `--output-file` is not provided or its extension is not recognized.
--   `--request-timeout-secs`, `-t`: Timeout for HTTP requests in seconds (default: 60).
--   `--num-http-retries`, `-r`: Number of retries for HTTP requests (default: 3).
-
-#### `partition`
-
-Partitions a large set of tiles into smaller PMTiles files. This is useful for managing large datasets, for example, to stay within file size limits for services like GitHub Releases. It creates a mosaic file if the output is partitioned into multiple files.
-
-```bash
-partition --from-source <source> [--from-source <source> ...] --to-pmtiles <file> [--size-limit <limit>] [--no-cache]
-```
-
--   `--from-source`: Path to a source file or directory. Can be repeated. Supported sources:
-    -   `.mbtiles` file: e.g., `path/to/file.mbtiles`
-    -   `.pmtiles` file (supports glob patterns): e.g., `path/to/*.pmtiles`
-    -   Directory containing tiles: e.g., `path/to/tiles_dir`
--   `--to-pmtiles`: Output PMTiles file. The prefix for partitioned files will be derived from this argument.
--   `--size-limit`: Maximum size of each partition. Can be a number in bytes (e.g., `100000000`), or with units (e.g., `100M`, `2G`), or a preset:
-    -   `github_release`: 2GB limit
-    -   `github_file`: 100MB limit
-    -   `cloudflare_object`: 512MB limit
-
-    Defaults to `github_release`.
--   `--no-cache`: Disable caching of tiles locally. Caching is on by default to speed up processing, but can consume significant disk space.
 
 #### `retile`
 

@@ -1,16 +1,7 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "mercantile",
-#     "pmtiles",
-#     "shapely",
-# ]
-# ///
 
 import os
 import re
 import sys
-import glob
 import json
 import argparse
 
@@ -33,7 +24,7 @@ from osgeo_utils.gdal2tiles import (
     DividedCache,
 )
 
-from .tile_sources import create_source_from_paths, MissingTileError
+from pmtiles_mosaic.tile_sources import create_source_from_paths, MissingTileError
 
 def run_external(cmd):
     print(f'running cmd - {cmd}')

@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from multiprocessing import set_start_method
 
-from .partition import partition_main
+from pmtiles_mosaic.partition import partition_main
+
 from .retile import retile_main
 
 

@@ -9,7 +9,7 @@ authors = [
 ]
 dependencies = [
     "mercantile>=1.2.1",
-    "pmtiles==3.4.1",
+    "pmtiles-mosaic>=0.1.0",
     "requests>=2.32.4",
     "shapely>=2.1.1",
 ]
@@ -38,15 +38,9 @@ repository = "https://github.com/ramSeraph/topo_map_processor.git"
 
 [project.scripts]
 collect-bounds = "topo_map_processor.tools.collect_bounds:cli"
-download-mosaic = "topo_map_processor.tools.download_mosaic:cli"
-partition = "topo_map_processor.tools.partition:cli"
-partition-basic = "topo_map_processor.tools.partition_basic:cli"
 retile = "topo_map_processor.tools.retile:cli"
 tile = "topo_map_processor.tools.tile:cli"
-generate-lists = "topo_map_processor.tools.execute_bash:generate_lists"
-upload-to-release = "topo_map_processor.tools.execute_bash:upload_to_release"
 retile-e2e = "topo_map_processor.tools.retile_e2e:cli"
-
 
 [build-system]
 requires = [
@@ -64,12 +58,10 @@ version-file = "topo_map_processor/_version.py"
 [tool.hatch.build.targets.sdist]
 include = [
     "topo_map_processor",
-    "topo_map_processor/bash_scripts/**",
 ]
 
 [tool.hatch.build.targets.wheel]
 include = [
     "topo_map_processor",
-    "topo_map_processor/bash_scripts/**",
 ]
 
