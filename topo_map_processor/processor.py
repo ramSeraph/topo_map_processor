@@ -1074,12 +1074,16 @@ class TopoMapProcessor:
 
         return ip
 
-    def get_4way_intersection_point(self, img, line_color, 
+    def get_4way_intersection_point(self, img, line_color, remove_text,
                                     find_line_scale, find_line_iter, 
-                                    cwidth, ext_thresh):
+                                    cwidth, ext_thresh, direction,
+                                    remove_corner_edges_ratio):
         img_mask = self.get_color_mask(img, line_color)
 
-        self.remove_text(img_mask)
+        if remove_text:
+            self.remove_text(img_mask)
+
+        self.remove_corner_edges(img_mask, direction, remove_corner_edges_ratio)
 
         h, w = img_mask.shape[:2]
         self.show_image(img_mask)
@@ -1106,7 +1110,8 @@ class TopoMapProcessor:
             if len(four_corner_ips) > 1:
                 continue
 
-            self.show_points(four_corner_ips, img_mask, [0, 255, 0])
+        self.show_points(four_corner_ips, img_mask, [0, 255, 0])
+
         if len(four_corner_ips) > 1:
             raise Exception(f'multiple intersection points found - {len(four_corner_ips)}')
 

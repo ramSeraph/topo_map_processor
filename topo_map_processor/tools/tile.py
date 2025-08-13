@@ -9,6 +9,7 @@ import subprocess
 
 from pathlib import Path
 from multiprocessing import set_start_method, cpu_count
+from pprint import pprint
 
 from osgeo_utils.gdal2tiles import submain as gdal2tiles_main
 
@@ -56,6 +57,14 @@ def get_tiler_cmd_params(tile_extension, tile_quality):
 
     raise ValueError(f'Unsupported tile extension: {tile_extension}, {SUPPORTED_FORMATS=}')
 
+def get_format(tile_extension):
+    if tile_extension == 'webp':
+        return 'webp'
+    if tile_extension == 'jpeg':
+        return 'jpeg'
+    if tile_extension == 'png':
+        return 'png'
+    raise ValueError(f'Unsupported tile extension: {tile_extension}, {SUPPORTED_FORMATS=}')
 
 
 def cli():
@@ -131,10 +140,12 @@ def cli():
 
     metadata_file = tiles_dir / 'tiles.json'
 
+    fmt = get_format(args.tile_extension)
+
     # it is not really a proper tilejson spec.. it is the basic things needed to populate a pmtiles metadata
     metadata = {
         'type': 'baselayer',
-        'format': format,
+        'format': fmt,
         'attribution': attribution_text,
         'description': args.description,
         'name': args.name,
@@ -142,6 +153,9 @@ def cli():
         'maxzoom': args.max_zoom,
         'minzoom': args.min_zoom,
     }
+
+    print(f'writing metadata to {metadata_file}')
+    pprint(metadata)
     metadata_file.write_text(json.dumps(metadata, indent=2))
 
     print('All Done!!')

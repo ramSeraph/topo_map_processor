@@ -135,7 +135,13 @@ The `get_intersection_point` method is the most critical part to customize for a
     3.  Identifying the point closest to the expected corner position, while also matching an expected angle and distance from an anchor point.
 
 ![corner for 4way intersection point](/samples/corner3.png)
--   **`get_4way_intersection_point`**: This is a more robust version for crosshair-style corners. It specifically looks for intersections where four lines meet, making it less prone to errors from stray lines in the map collar.
+-   **`get_4way_intersection_point`**: This is a more robust version for crosshair-style corners. It works by:
+    1.  Isolating lines based on their color.
+    2.  Optionally removing any text that might interfere with line detection.
+    3.  Ignoring the edges of the corner image patch to avoid spurious intersections with the border.
+    4.  Detecting all horizontal and vertical lines and finding their intersection points.
+    5.  Validating each intersection by checking for the presence of lines extending in all four directions (up, down, left, right) from the intersection point. This ensures it's a true 4-way "crosshair" intersection.
+    6.  It is designed to be very specific and will fail if it doesn't find exactly one 4-way intersection.
 
 ![corner for biggest contour corner](/samples/corner2.png)
 -   **`get_biggest_contour_corner`**: This strategy is designed for corners that are marked by a solid shape or a filled area (e.g., a colored square or circle). It works by:
