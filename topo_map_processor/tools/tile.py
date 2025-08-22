@@ -13,6 +13,8 @@ from pprint import pprint
 
 from osgeo_utils.gdal2tiles import submain as gdal2tiles_main
 
+from .utils import relax_open_file_limit
+
 SUPPORTED_FORMATS = ['webp', 'jpeg', 'png']
 
 def run_external(cmd):
@@ -95,6 +97,7 @@ def cli():
     else:
         attribution_text = args.attribution
 
+    relax_open_file_limit()
 
     tiles_dir = Path(args.tiles_dir)
     tiles_dir.mkdir(parents=True, exist_ok=True)

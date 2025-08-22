@@ -26,6 +26,8 @@ from osgeo_utils.gdal2tiles import (
 
 from pmtiles_mosaic.tile_sources import create_source_from_paths, MissingTileError
 
+from .utils import relax_open_file_limit
+
 def run_external(cmd):
     print(f'running cmd - {cmd}')
     start = time.time()
@@ -444,6 +446,8 @@ def retile_main(args):
     tile_extension = metadata['format']
     if tile_extension == 'jpg':
         tile_extension = 'jpeg'
+
+    relax_open_file_limit()
 
     os.environ['GDAL_CACHEMAX'] = '2048'
     os.environ['GDAL_MAX_DATASET_POOL_SIZE'] = '5000'
