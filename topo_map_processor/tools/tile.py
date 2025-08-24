@@ -141,7 +141,7 @@ def cli():
 
     vrt_file.unlink()
 
-    metadata_file = tiles_dir / 'tiles.json'
+    metadata_file = tiles_dir / 'metadata.json'
 
     fmt = get_format(args.tile_extension)
 

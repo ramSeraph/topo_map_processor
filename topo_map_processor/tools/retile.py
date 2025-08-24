@@ -84,7 +84,7 @@ class DiskTilesHandler:
         print(f'deleted {delete_count} files at level {z}')
 
     def save_metadata(self, metadata):
-        metadata_file = self.dir.joinpath('tiles.json')
+        metadata_file = self.dir.joinpath('metadata.json')
         metadata_file.write_text(json.dumps(metadata, indent=2))
 
  
