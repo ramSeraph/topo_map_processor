@@ -1748,7 +1748,13 @@ class TopoMapProcessor:
             reproj_options = f'-tps -ts 0 {self.warp_output_height} -r bilinear -t_srs "EPSG:3857"' 
         else:
             res = self.get_resolution()
-            reproj_options = f'-tps -tr {res} {res} -r bilinear -t_srs "EPSG:3857"' 
+            if res == 'auto':
+                reproj_options = '-tps -r bilinear -t_srs "EPSG:3857"'
+            else:
+                if type(res) is not list:
+                    res = [res, res]
+                reproj_options = f'-tps -tr {res[0]} {res[1]} -r bilinear -t_srs "EPSG:3857"' 
+
         #nodata_options = '-dstnodata 0'
         nodata_options = '-dstalpha'
         perf_options = '-multi -wo NUM_THREADS=ALL_CPUS --config GDAL_CACHEMAX 1024 -wm 1024' 
