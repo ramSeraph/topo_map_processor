@@ -85,6 +85,8 @@ class TopoMapProcessor:
         self.extents = extra.get('extents', None)
         self.pixel_cutlines = extra.get('pixel_cutlines', [])
 
+        self.inset_pixel_cutlines = extra.get('inset_pixel_cutlines', None)
+        self.inset_inpaint_color = extra.get('inset_inpaint_color', (255, 255, 255))
         # rotation related
         self.auto_rotate_thresh = extra.get('auto_rotate_thresh', 0.0)
 
@@ -767,7 +769,7 @@ class TopoMapProcessor:
             map_contour = ctuples[map_inner_contour_idx][0]
 
         return map_contour
- 
+
     def get_maparea(self):
         workdir = self.get_workdir()
 
@@ -826,7 +828,6 @@ class TopoMapProcessor:
         if rotated_info_file.exists():
             print('already rotated.. skipping rotation')
             return
-
 
         map_bbox, map_min_rect, _ = self.get_maparea()
         _, _, angle = map_min_rect
@@ -1770,6 +1771,22 @@ class TopoMapProcessor:
 
         return sheet_ibox
 
+    def inpaint_insets(self, img, inset_pixel_cutlines, inpaint_color):
+        cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+        for inset_pixel_cutline in inset_pixel_cutlines:
+            print(f'filling in inset with pixel cutline: {inset_pixel_cutline}')
+            # Create a mask for the inset area
+            mask = np.zeros(cv_img.shape[:2], dtype=np.uint8)
+            pts = np.array([inset_pixel_cutline], dtype=np.int32)
+            cv2.fillPoly(mask, pts, 255)
+            # fill the area in cv_img with inpaint_color
+            cv_img[mask == 255] = inpaint_color
+
+        inpainted_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(inpainted_img)
+
+
     def export_bounds_file(self):
         bounds_dir = self.get_bounds_dir()
 
@@ -1824,12 +1841,24 @@ class TopoMapProcessor:
 
         self.export_gtiff(str(final_file), str(export_file), self.jpeg_export_quality)
 
+    def remove_insets(self):
+        if self.inset_pixel_cutlines is None or len(self.inset_pixel_cutlines) == 0:
+            return
+        full_img = self.get_full_img()
+        inpainted_img = self.inpaint_insets(full_img, self.inset_pixel_cutlines, self.inset_inpaint_color)
+        workdir = self.get_workdir()
+        inpainted_file = workdir.joinpath('full.jpg')
+        self.ensure_dir(workdir)
+        inpainted_img.save(inpainted_file)
+        self.full_img = None
+
 
     def process(self):
         export_file = self.get_export_file()
         if export_file.exists():
             return True
 
+        self.remove_insets()
         self.rotate()
 
         # pause to debug 
