@@ -1588,9 +1588,6 @@ class TopoMapProcessor:
             self.remove_grid_lines()
             from_file = workdir.joinpath('nogrid.jpg')
 
-        ibox = self.get_sheet_ibox()
-        print(ibox)
-
         crs_proj = self.get_crs_proj()
 
         gcps = self.get_gcps()
@@ -1604,6 +1601,7 @@ class TopoMapProcessor:
         creation_options = '-co TILED=YES -co COMPRESS=DEFLATE -co PREDICTOR=2' 
         perf_options = '--config GDAL_CACHEMAX 128 --config GDAL_NUM_THREADS ALL_CPUS'
 
+        self.ensure_dir(workdir)
         translate_cmd = f'gdal_translate {creation_options} {perf_options} {gcp_str} -a_srs "{crs_proj}" -of GTiff {str(from_file)} {str(georef_file)}' 
         self.run_external(translate_cmd)
 
@@ -1800,6 +1798,7 @@ class TopoMapProcessor:
 
         sheet_ibox = self.get_updated_sheet_ibox()
         
+        self.ensure_dir(workdir)
         self.warp_file(sheet_ibox, cutline_file, georef_file, final_file, self.warp_jpeg_export_quality)
 
     def export_gtiff(self, filename, out_filename, jpeg_export_quality):
