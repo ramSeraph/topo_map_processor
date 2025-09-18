@@ -24,7 +24,8 @@ from osgeo_utils.gdal2tiles import (
     DividedCache,
 )
 
-from pmtiles_mosaic.tile_sources import create_source_from_paths, MissingTileError
+from pmtiles_mosaic.tile_sources import create_source_from_paths
+from pmtiles_mosaic.tiles_common import MissingTileError
 
 from .utils import relax_open_file_limit
 
