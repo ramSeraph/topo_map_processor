@@ -492,6 +492,10 @@ class TopoMapProcessor:
         #cv2.imwrite('temp.jpg', img_strip)
 
         line_poly_t = translate(line_poly, xoff=-bb[0], yoff=-bb[1])
+        # if empty then nothing to do
+        if line_poly_t.is_empty:
+            print('line poly empty, nothing to do')
+            return
         mask = np.zeros(img_strip.shape[:2], dtype=np.uint8)
         poly_coords = np.array([ [int(x[0]), int(x[1])] for x in line_poly_t.exterior.coords ])
         cv2.fillPoly(mask, pts=[poly_coords], color=1)
