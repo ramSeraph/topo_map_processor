@@ -34,6 +34,9 @@ jobs:
 
       - name: Build the project
         run: |
+            version=${{ github.ref_name }}
+            version=${version#v}
+            export SETUPTOOLS_SCM_PRETEND_VERSION=$version
             # from https://github.com/astral-sh/uv/issues/8729#issuecomment-2654619679
             uv lock --check
             cp pyproject.toml pyproject.toml.bak
