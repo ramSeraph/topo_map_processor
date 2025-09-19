@@ -32,15 +32,18 @@ jobs:
       - name: Set up Python
         run: uv python install
 
-      - name: Install the project
-        run: uv sync --all-extras --dev
-
       - name: Build the project
         run: |
-            version=${{ github.ref_name }}
-            version=${version#v}
-            export SETUPTOOLS_SCM_PRETEND_VERSION=$version
+            # from https://github.com/astral-sh/uv/issues/8729#issuecomment-2654619679
+            uv lock --check
+            cp pyproject.toml pyproject.toml.bak
+            cp uv.lock uv.lock.bak
+            uv export --locked --no-dev --no-extra pinned --no-hashes --no-emit-workspace --output-file pinned_requirements.txt > /dev/null
+            uv add --optional pinned -r pinned_requirements.txt
             uv build
+            mv pyproject.toml.bak pyproject.toml
+            mv uv.lock.bak uv.lock
+            rm -f pinned_requirements.txt
 
       - name: Publish distribution 
         run: uv publish
