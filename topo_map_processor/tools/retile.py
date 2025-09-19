@@ -186,7 +186,8 @@ class Tiler:
             '-r', 'antialias',
             '--verbose',
             '-w', 'none',
-            '--exclude', 
+            # N.B. if transperent tiles are excluded, the old data might show through
+            #'--exclude',
             '--resume', 
             '--xyz', 
             '--processes', f'{self.pool._processes}', 
@@ -206,7 +207,8 @@ class Tiler:
             'verbose': False,
             'quiet': False,
             'xyz': True,
-            'exclude_transparent': True,
+            # N.B. if transperent tiles are excluded, the old data might show through
+            #'exclude_transparent': True,
             'profile': 'mercator',
             'resampling': 'antialias',
             'tiledriver': tile_driver,
