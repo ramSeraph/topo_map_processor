@@ -73,6 +73,15 @@ def cli():
     run_command(["gh", "release", "download", args.gtiffs_release, "-p", "listing_files.csv", "--clobber"])
     run_command(["gh", "release", "download", args.pmtiles_release, "-p", args.listing_files_tiled, "--clobber", "-O", "listing_files_tiled.csv"])
 
+    print("Download force redo bounds")
+    force_redo_bounds_file = Path("force_redo_bounds.geojson")
+    try:
+        run_command(["gh", "release", "download", args.pmtiles_release, "-p", f"{force_redo_bounds_file}", "--clobber"])
+        print("Force redo bounds file found and downloaded.")
+    except subprocess.CalledProcessError:
+        print("No force redo bounds file found; proceeding without it.")
+        force_redo_bounds_file = None
+
     # Determine sheets to retile
     print("Determining sheets to retile...")
     with open("listing_files.csv") as f:
@@ -101,6 +110,9 @@ def cli():
     print("Getting original PMTiles files...")
     run_command(["gh", "release", "download", args.pmtiles_release, "-D", str(from_pmtiles_dir), "-p", f"{args.pmtiles_prefix}*"])
 
+    extra_bounds_args = []
+    if force_redo_bounds_file:
+        extra_bounds_args = ["--force-redo-bounds-file", str(force_redo_bounds_file)]
     # Get list of sheets to pull
     print("Getting list of sheets to pull...")
     retile_main([
@@ -108,7 +120,7 @@ def cli():
         "--bounds-file", "bounds.geojson",
         "--sheets-to-pull-list-outfile", str(sheets_to_pull_list_outfile),
         "--from-source", f"{from_pmtiles_prefix}*.pmtiles",
-    ])
+    ] + extra_bounds_args)
 
     print("Sheets to pull:")
     print(sheets_to_pull_list_outfile.read_text())
@@ -136,7 +148,7 @@ def cli():
         "--from-source", f"{from_pmtiles_prefix}*.pmtiles",
         "--tiles-dir", str(tiles_dir),
         "--tiffs-dir", str(tiffs_dir),
-    ])
+    ] + extra_bounds_args)
 
     retile_list_file.unlink()
     Path("bounds.geojson").unlink()
@@ -167,6 +179,12 @@ def cli():
     print("Uploading new listing file...")
     run_command(["gh", "release", "upload", args.pmtiles_release, args.listing_files_tiled, "--clobber"])
     Path(args.listing_files_tiled).unlink()
+
+    # Handle force redo bounds file
+    if force_redo_bounds_file:
+        print("Deleting force redo bounds file...")
+        run_command(["gh", "release", "delete-asset", args.gtiffs_release, str(force_redo_bounds_file), '-y'])
+        force_redo_bounds_file.unlink()
 
     # Cleanup
     print("Cleaning up staging directories...")
