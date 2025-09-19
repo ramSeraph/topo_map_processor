@@ -4,6 +4,7 @@ import re
 import sys
 import json
 import argparse
+import tempfile
 
 import time
 import subprocess
@@ -319,7 +320,7 @@ def check_sheets(sheets_to_pull, tiffs_dir):
         raise Exception(f'missing files {missing}')
 
 
-def get_sheet_data(bounds_fname):
+def get_sheet_data(bounds_fname, dummy=False):
 
     index_file = Path(bounds_fname)
     if not index_file.exists():
@@ -327,9 +328,14 @@ def get_sheet_data(bounds_fname):
 
     index_data = json.loads(index_file.read_text())
 
+    dummy_count = 0
     sheets_to_box = {}
     for f in index_data['features']:
-        sheet_no = f['properties']['id']
+        if not dummy:
+            sheet_no = f['properties']['id']
+        else:
+            sheet_no = f'dummy_{dummy_count}'
+            dummy_count += 1
         geom = shape(f['geometry'])
         xmin, ymin, xmax, ymax = geom.bounds
         box = mercantile.LngLatBbox(xmin, ymin, xmax, ymax)
@@ -354,33 +360,61 @@ def get_base_tile_sheet_mappings(sheets_to_box, base_zoom):
 
    
 
-def assess_sheet_requirements(retile_list_file, bounds_file, max_zoom):
+def assess_sheet_requirements(retile_list_file, bounds_file, dummy_bounds_file, max_zoom):
 
     retile_sheets = retile_list_file.read_text().split('\n')
     retile_sheets = set([ r.strip().replace('.tif', '') for r in retile_sheets if r.strip() != '' ])
 
     print('getting base tiles to sheet mapping')
     sheets_to_box = get_sheet_data(bounds_file)
+    dummy_sheets_to_box = {}
+    if dummy_bounds_file:
+        dummy_sheets_to_box = get_sheet_data(dummy_bounds_file, dummy=True)
+        sheets_to_box.update(dummy_sheets_to_box)
+
     sheets_to_base_tiles, base_tiles_to_sheets = get_base_tile_sheet_mappings(sheets_to_box, max_zoom)
 
     print('calculating sheets to pull')
     affected_base_tiles = set()
     for sheet_no in retile_sheets:
         affected_base_tiles.update(sheets_to_base_tiles[sheet_no])
+    for sheet_no in dummy_sheets_to_box.keys():
+        affected_base_tiles.update(sheets_to_base_tiles[sheet_no])
 
     sheets_to_pull = set()
     for tile in affected_base_tiles:
         to_add = base_tiles_to_sheets[tile]
         for sheet in to_add:
-            sheets_to_pull.add(sheet + '.tif')
+            if sheet not in dummy_sheets_to_box:
+                sheets_to_pull.add(sheet + '.tif')
 
     return sheets_to_pull, affected_base_tiles
+
+def create_dummy_sheets(dummy_bounds_file, tiffs_dir):
+    print('creating dummy sheets')
+    dummy_sheets_to_box = get_sheet_data(dummy_bounds_file, dummy=True)
+
+    for sheet_no, box in dummy_sheets_to_box.items():
+        file = tiffs_dir.joinpath(f'{sheet_no}.tif')
+        if file.exists():
+            continue
+
+        west, south, east, north = box.west, box.south, box.east, box.north
+        temp_file = Path(tempfile.mktemp(suffix='.tif'))
+        cmd = f'gdal_create -of GTiff -a_srs EPSG:4326 -a_ullr {west} {north} {east} {south} -a_nodata 0 -ot Byte -co COMPRESS=LZW -bands 3 -burn 0 0 0 -outsize 256 256 {temp_file}'
+        run_external(cmd)
+        temp_file_1 = Path(tempfile.mktemp(suffix='.tif'))
+        cmd = f'gdalwarp -dstalpha -t_srs EPSG:3857 -co COMPRESS=LZW {temp_file} {temp_file_1}'
+        run_external(cmd)
+        cmd = f'gdal_translate -co TILING_SCHEME=GoogleMapsCompatible -co COMPRESS=JPEG -co QUALITY=100 --config GDAL_TIFF_INTERNAL_MASK YES  -b 1 -b 2 -b 3 -mask 4 --config GDAL_CACHEMAX 512 -of COG {temp_file_1} {file}'
+        run_external(cmd)
 
 def retile_main(args):
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
     parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
+    parser.add_argument('--dummy-bounds-file', required=False, help='Geojson file containing georaphic bounds of areas that need to be updated, these areas might not have any new sheets')
     parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for, needed only when --from-source is not provided')
     parser.add_argument('--sheets-to-pull-list-outfile', default=None,
                         help='Output into which we write the list of sheet that need to be pulled, if set, the script ends after it created the list file')
@@ -399,6 +433,12 @@ def retile_main(args):
     bounds_file = Path(args.bounds_file)
     if not bounds_file.exists():
         parser.error(f'Bounds file {args.bounds_file} does not exist')
+
+    dummy_bounds_file = None
+    if args.dummy_bounds_file:
+        dummy_bounds_file = Path(args.dummy_bounds_file) 
+        if not dummy_bounds_file.exists():
+            parser.error(f'Dummy bounds file {args.dummy_bounds_file} does not exist')
 
 
     if not args.sheets_to_pull_list_outfile:
@@ -430,7 +470,7 @@ def retile_main(args):
             print(f'--max-zoom argument is ignored when --from-source is set, using max zoom from original source: {max_zoom}')
 
     # calculate the sheets to pull and affected base tiles
-    sheets_to_pull, affected_base_tiles = assess_sheet_requirements(retile_list_file, bounds_file, max_zoom)
+    sheets_to_pull, affected_base_tiles = assess_sheet_requirements(retile_list_file, bounds_file, dummy_bounds_file, max_zoom)
 
     if args.sheets_to_pull_list_outfile is not None:
         Path(args.sheets_to_pull_list_outfile).write_text('\n'.join(sheets_to_pull) + '\n')
@@ -442,6 +482,9 @@ def retile_main(args):
 
     print('check the sheets availability')
     check_sheets(sheets_to_pull, tiffs_dir)
+
+    if dummy_bounds_file is not None:
+        create_dummy_sheets(dummy_bounds_file, tiffs_dir)
 
     metadata = orig_source.get_metadata()
     tile_extension = metadata['format']
