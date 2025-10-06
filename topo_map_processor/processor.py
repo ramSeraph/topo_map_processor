@@ -1096,7 +1096,8 @@ class TopoMapProcessor:
         if remove_text:
             self.remove_text(img_mask)
 
-        self.remove_corner_edges(img_mask, direction, remove_corner_edges_ratio)
+        if remove_corner_edges_ratio is not None:
+            self.remove_corner_edges(img_mask, direction, remove_corner_edges_ratio)
 
         h, w = img_mask.shape[:2]
         self.show_image(img_mask)
@@ -1174,7 +1175,8 @@ class TopoMapProcessor:
 
         anchor_corner = (ax, ay)
 
-        self.remove_corner_edges(img_mask, direction, remove_corner_edges_ratio)
+        if remove_corner_edges_ratio is not None:
+            self.remove_corner_edges(img_mask, direction, remove_corner_edges_ratio)
 
         frame_contour = self.get_biggest_contour(img_mask, corner_erode, True, max_corner_contour_area_ratio)
 
@@ -1238,7 +1240,8 @@ class TopoMapProcessor:
 
         img_c_mask = self.get_color_mask(img, corner_contour_color)
         self.remove_text(img_c_mask)
-        self.remove_corner_edges(img_c_mask, direction, self.remove_corner_edges_ratio)
+        if remove_corner_edges_ratio is not None:
+            self.remove_corner_edges(img_c_mask, direction, remove_corner_edges_ratio)
         frame_contour = self.get_biggest_contour(img_c_mask, self.corner_erode, True, max_corner_contour_area_ratio)
 
         frame_contour_area = self.get_bbox_area_simple(frame_contour)
