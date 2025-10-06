@@ -204,6 +204,18 @@ retile [--retile-list-file <file>] --bounds-file <file> [--force-redo-bounds-fil
 -   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
 -   `--tile-quality`: Quality of compression for webp and jpeg (default: 75).
 
+#### `create-force-redo-bounds`
+
+Creates a GeoJSON file that defines areas to be forcibly re-tiled, based on the differences between an old and a new bounds file. This is useful for identifying regions where map sheets may have been updated, moved, or removed.
+
+```bash
+create-force-redo-bounds --old-bounds-file <file> --new-bounds-file <file> --output-file <file>
+```
+
+-   `--old-bounds-file`: The previous version of the bounds GeoJSON file. (Required)
+-   `--new-bounds-file`: The new version of the bounds GeoJSON file. (Required)
+-   `--output-file`: The path to write the output GeoJSON file, which will contain the bounds of the areas to be force-retiled. (Required)
+
 #### `tile`
 
 Creates web map tiles from a directory of GeoTIFF files. It combines them into a virtual raster (`.vrt`) for efficient processing.
