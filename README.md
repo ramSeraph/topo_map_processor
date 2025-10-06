@@ -169,6 +169,45 @@ Similar to corner detection, the `locate_grid_lines` method can be implemented u
 
 This project provides several command-line tools to work with topographic maps. These tools are dynamically loaded, and you can get the most up-to-date usage information by running the tool with the `--help` flag.
 
+### Map Update Workflow
+
+This project provides a robust workflow for updating an existing tile set when map sheets are added, removed, or modified. The primary tools for this are `retile` and `create-force-redo-bounds`.
+
+The general workflow is as follows:
+
+1.  **Generate New Bounds**: After processing new or updated map scans with the library, you will have a new set of COGs and `.geojsonl` bound files. Use the `collect-bounds` tool to create an updated `bounds.geojson` file that reflects the current state of your map collection.
+
+2.  **Identify Changes**: Use the `create-force-redo-bounds` tool to compare your old `bounds.geojson` with the new one.
+
+    ```bash
+    create-force-redo-bounds --old-bounds-file old-bounds.geojson --new-bounds-file new-bounds.geojson --output-file force-redo.geojson
+    ```
+
+    This command analyzes the differences:
+    *   **Added Sheets**: If a map sheet exists in `new-bounds.geojson` but not in `old-bounds.geojson`.
+    *   **Deleted Sheets**: If a sheet is in `old-bounds.geojson` but has been removed from `new-bounds.geojson`.
+    *   **Modified Sheets**: If a sheet's geometry (boundary) or its content (indicated by a change in the `digest` property) has been updated.
+
+    The output, `force-redo.geojson`, will contain the geographic areas for all these changes, which tells the `retile` tool exactly which regions of the map need to be regenerated.
+
+3.  **Retile Affected Areas**: Use the `retile` tool to perform the update. The `force-redo.geojson` file you created contains all the information about what has changed, so a separate list of sheets is not required.
+
+    ```bash
+    retile --bounds-file new-bounds.geojson \
+           --force-redo-bounds-file force-redo.geojson \
+           --from-source "existing-tiles/*.pmtiles" \
+           --tiffs-dir /path/to/cogs \
+           --tiles-dir /path/to/output/tiles
+    ```
+
+    The `retile` tool will:
+    *   Identify all GeoTIFFs needed to regenerate the affected tiles (including adjacent, unchanged sheets).
+    *   Generate new base tiles for the changed areas.
+    *   Copy unchanged tiles from your existing tile set (`--from-source`).
+    *   Re-create parent tiles up the zoom levels.
+
+This workflow ensures that your tile set is updated efficiently, without having to re-process the entire map collection.
+
 #### `collect-bounds`
 
 Collects individual GeoJSONL bound files into a single GeoJSON FeatureCollection.
