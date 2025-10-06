@@ -4,6 +4,7 @@ import time
 import json
 import pickle
 import shutil
+import hashlib
 import subprocess
 
 from pathlib import Path
@@ -81,6 +82,7 @@ class TopoMapProcessor:
         self.small_img = None
         self.mapbox_corners = None
         self.rotation_reversal_params = None
+        self.digest = None
 
         self.extents = extra.get('extents', None)
         self.pixel_cutlines = extra.get('pixel_cutlines', [])
@@ -131,6 +133,7 @@ class TopoMapProcessor:
         self.jpeg_export_quality = extra.get('jpeg_export_quality', 75)
         self.warp_jpeg_export_quality = extra.get('warp_jpeg_export_quality', 75)
         self.warp_output_height = extra.get('warp_output_height', 6500)
+
 
         self.color_map = {
             'black':   ((0, 0, 0), (179, 255, 130)),
@@ -1610,6 +1613,21 @@ class TopoMapProcessor:
         translate_cmd = f'gdal_translate {creation_options} {perf_options} {gcp_str} -a_srs "{crs_proj}" -of GTiff {str(from_file)} {str(georef_file)}' 
         self.run_external(translate_cmd)
 
+    def get_digest(self):
+        if self.digest is not None:
+            return self.digest
+
+        hasher = hashlib.sha256()
+        export_file = self.get_export_file()
+        with open(export_file, 'rb') as f:
+            while True:
+                data = f.read(65536)
+                if not data:
+                    break
+                hasher.update(data)
+        self.digest = hasher.hexdigest()
+        return self.digest
+
     def get_cutline_props(self):
         crs_proj = self.get_crs_proj()
 
@@ -1621,6 +1639,7 @@ class TopoMapProcessor:
             'crs': crs_proj,
             'gcps': self.get_gcps(pre_rotated=True),
             'pixel_cutline': self.get_full_pixel_cutline(pre_rotated=True),
+            'digest': self.get_digest(),
         })
         return props
 
