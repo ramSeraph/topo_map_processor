@@ -488,6 +488,10 @@ class TopoMapProcessor:
         ls = LineString(line)
         line_poly = ls.buffer(line_buf, resolution=1, cap_style=CAP_STYLE.flat).intersection(limits)
         blur_poly = ls.buffer(blur_buf, resolution=1, cap_style=CAP_STYLE.flat).intersection(limits)
+        print(f'removing line {line} with line_buf {line_buf}, blur_buf {blur_buf}, blur_kern {blur_kern}, blur_repeat {blur_repeat}')
+        if blur_poly.is_empty:
+            print('blur poly empty, nothing to do')
+            return
         bb = blur_poly.bounds
         bb = [ round(x) for x in bb ]
         # restrict to a small img strip to make things less costly
