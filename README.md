@@ -183,17 +183,17 @@ collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file
 
 #### `retile`
 
-Retiles a specific list of sheets (GeoTIFFs) and updates the corresponding tiles in an existing tile set. It can determine which other sheets are affected and need to be pulled in to correctly retile the area.
+Retiles a specific list of sheets (GeoTIFFs) or a specific area and updates the corresponding tiles in an existing tile set. It can determine which other sheets are affected and need to be pulled in to correctly retile the area.
 
 The tool works in two stages. First, it calculates the full set of sheets that need to be processed (the "pull list"), which includes the sheets from the input list plus any adjacent sheets that share tiles. You can run the tool with `--sheets-to-pull-list-outfile` to generate this list and then exit. This is useful for fetching the required GeoTIFFs before proceeding.
 
 In the second stage, it retiles the affected area. It uses the pull list to create a temporary virtual raster (`.vrt`), generates new base tiles for the affected region, and then reconstructs the upper-level tiles by pulling existing, unaffected tiles from the PMTiles source.
 
 ```bash
-retile --retile-list-file <file> --bounds-file <file> [--force-redo-bounds-file <file>] [--max-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-source <source>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>] [--tile-quality <quality>]
+retile [--retile-list-file <file>] --bounds-file <file> [--force-redo-bounds-file <file>] [--max-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-source <source>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>] [--tile-quality <quality>]
 ```
 
--   `--retile-list-file`: File containing the list of sheets to retile. (Required)
+-   `--retile-list-file`: File containing the list of sheets to retile. (Optional)
 -   `--bounds-file`: GeoJSON file containing the list of available sheets and their geographic bounds. (Required)
 -   `--force-redo-bounds-file`: GeoJSON file containing geographic bounds of areas that need to be updated. These areas might not have any new sheets. (Optional)
 -   `--max-zoom`: Maximum zoom level to create tiles for. Defaults to the max zoom from the source if `--from-source` is provided, otherwise it is required.

@@ -364,8 +364,10 @@ def get_base_tile_sheet_mappings(sheets_to_box, base_zoom):
 
 def assess_sheet_requirements(retile_list_file, bounds_file, force_redo_bounds_file, max_zoom):
 
-    retile_sheets = retile_list_file.read_text().split('\n')
-    retile_sheets = set([ r.strip().replace('.tif', '') for r in retile_sheets if r.strip() != '' ])
+    retile_sheets = set()
+    if retile_list_file:
+        retile_sheets = retile_list_file.read_text().split('\n')
+        retile_sheets = set([ r.strip().replace('.tif', '') for r in retile_sheets if r.strip() != '' ])
 
     print('getting base tiles to sheet mapping')
     sheets_to_box = get_sheet_data(bounds_file)
@@ -414,7 +416,7 @@ def create_dummy_sheets(dummy_bounds_file, tiffs_dir):
 def retile_main(args):
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--retile-list-file', required=True, help='File containing list of sheets to retile')
+    parser.add_argument('--retile-list-file', required=False, default=None, help='File containing list of sheets to retile')
     parser.add_argument('--bounds-file', required=True, help='Geojson file containing list of available sheets and their georaphic bounds')
     parser.add_argument('--force-redo-bounds-file', required=False, help='Geojson file containing georaphic bounds of areas that need to be updated, these areas might not have any new sheets')
     parser.add_argument('--max-zoom', type=int, help='Maximum zoom level to create tiles for, needed only when --from-source is not provided')
@@ -428,8 +430,11 @@ def retile_main(args):
 
     args = parser.parse_args(args)
 
-    retile_list_file = Path(args.retile_list_file)
-    if not retile_list_file.exists():
+    if not args.retile_list_file and not args.force_redo_bounds_file:
+        parser.error('At least one of --retile-list-file or --force-redo-bounds-file must be provided.')
+
+    retile_list_file = Path(args.retile_list_file) if args.retile_list_file else None
+    if retile_list_file and not retile_list_file.exists():
         parser.error(f'Retile list file {args.retile_list_file} does not exist')
 
     bounds_file = Path(args.bounds_file)
