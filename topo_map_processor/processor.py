@@ -108,6 +108,7 @@ class TopoMapProcessor:
         self.use_bbox_area = extra.get('use_bbox_area', True)
         self.shrunk_map_area_corners = extra.get('shrunk_map_area_corners', None)
         self.poly_approx_factor = extra.get('poly_approx_factor', 0.001)
+        self.map_area_ratio_thresh = extra.get('map_area_ratio_thresh', 0.5)
 
         # corners related
         self.corner_ratio = extra.get('corner_ratio', 400.0 / 9000.0)
@@ -813,7 +814,7 @@ class TopoMapProcessor:
 
                 h, w = img.shape[:2]
                 total_area = w * h
-                if total_area / map_area > 2:
+                if map_area / total_area < self.map_area_ratio_thresh:
                     raise Exception(f'map area less than expected, {map_area=}, {total_area=}')
     
                 self.show_contours(img_mask, [map_contour])
