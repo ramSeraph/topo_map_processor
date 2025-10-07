@@ -1261,6 +1261,7 @@ class TopoMapProcessor:
             fx + fw * ( 1 if direction[0] < 0 else 0), 
             fy + fh * ( 1 if direction[1] < 0 else 0), 
         ]
+
         frame_diag_len = self.get_distance((0,0), (fh,fw))
         self.show_points([frame_anchor_point], img_c_mask, [0,0,255])
 
@@ -1305,10 +1306,24 @@ class TopoMapProcessor:
         map_poly_points = self.reorder_poly_points(map_poly_points)
         print(f'{map_poly_points=}')
 
+        all_corner_overrides_given = all([ c is not None for c in corner_overrides ])
+        if all_corner_overrides_given:
+            return corner_overrides
+
+        some_corner_overrides_given = any([ c is not None for c in corner_overrides ])
+        if some_corner_overrides_given and  len(corner_overrides) != len(map_poly_points):
+            raise ValueError("If some corner overrides are given, either all must be given or the number of overrides must match the number of polygon points.")
+
         #num_corners = len(map_poly_points)
         box = LinearRing(map_poly_points + [map_poly_points[0]])
         buffered_poly = box.buffer(-cw/2, single_sided=True, join_style=JOIN_STYLE.mitre)
-        inner_ring = buffered_poly.interiors[0]
+
+        # TODO: this is a hack.. understand why this happens and fix it properly
+        if len(buffered_poly.interiors) == 0:
+            inner_ring = buffered_poly.exterior
+        else:
+            inner_ring = buffered_poly.interiors[0]
+
         corner_centers = list(inner_ring.coords)
         corner_centers.reverse()
         print(f'{corner_centers=}')
@@ -1401,7 +1416,7 @@ class TopoMapProcessor:
         corner_overrides = [ (c[0] - map_bbox_scaled[0], c[1] - map_bbox_scaled[1]) if c is not None else None for c in corner_overrides_full ]
         map_poly_points_scaled = [ (p[0] - map_bbox_scaled[0], p[1] - map_bbox_scaled[1]) for p in map_poly_points_scaled ]
 
-        if self.extents is None:
+        if len(corner_overrides) == 4:
             corners = self.locate_corners(map_img, corner_overrides)
         else:
             corners = self.locate_corners_generic(map_img, map_poly_points_scaled, corner_overrides)
@@ -1714,7 +1729,7 @@ class TopoMapProcessor:
         workdir = self.get_workdir()
         rotated_info_file = workdir.joinpath('rotated_info.txt')
         if not rotated_info_file.exists():
-            raise Exception(f'rotated_info.txt does not exist in {workdir}')
+            return RotationReversalParams(False, 0.0, None, None)
 
         parts = rotated_info_file.read_text().strip().split(',')
         angle = float(parts[0])
