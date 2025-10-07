@@ -1662,7 +1662,6 @@ class TopoMapProcessor:
             'crs': crs_proj,
             'gcps': self.get_gcps(pre_rotated=True),
             'pixel_cutline': self.get_full_pixel_cutline(pre_rotated=True),
-            'digest': self.get_digest(),
         })
         return props
 
@@ -1855,6 +1854,32 @@ class TopoMapProcessor:
 
         self.run_external(f'ogr2ogr -t_srs EPSG:4326 -s_srs "{crs_proj}" -f GeoJSONSeq {str(bounds_file)} {cutline_file}')
 
+    def add_digest_to_bounds_file(self):
+        bounds_dir = self.get_bounds_dir()
+
+        bounds_file = bounds_dir.joinpath(f'{self.get_id()}.geojsonl')
+        if not bounds_file.exists():
+            print(f'{bounds_file} does not exist.. cannot add digest')
+            return
+
+        digest = self.get_digest()
+
+        with open(bounds_file, 'r') as f:
+            lines = f.readlines()
+
+        if len(lines) != 1:
+            print(f'expected 1 line in {bounds_file}, got {len(lines)}')
+            return
+
+        feature = json.loads(lines[0])
+        if 'properties' not in feature:
+            feature['properties'] = {}
+
+        feature['properties']['digest'] = digest
+
+        with open(bounds_file, 'w') as f:
+            f.write(json.dumps(feature) + '\n')
+
     def warp(self):
         workdir = self.get_workdir()
 
@@ -1892,6 +1917,9 @@ class TopoMapProcessor:
         final_file = self.get_workdir().joinpath('final.tif')
 
         self.export_gtiff(str(final_file), str(export_file), self.jpeg_export_quality)
+
+        self.add_digest_to_bounds_file()
+
 
     def remove_insets(self):
         if self.inset_pixel_cutlines is None or len(self.inset_pixel_cutlines) == 0:
