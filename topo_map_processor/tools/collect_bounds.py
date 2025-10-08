@@ -5,23 +5,32 @@ from pathlib import Path
 
 def cli():
     parser = argparse.ArgumentParser(description='Collect GeoJSONL files into a single GeoJSON file.')
-    parser.add_argument('--bounds-dir', required=True, help='Directory containing GeoJSONL files')
-    parser.add_argument('--output-file', required=True, help='Output GeoJSON file path')
-    parser.add_argument('--preexisting-file', help='preexisting GeoJSON file to base things on', default=None)
+    parser.add_argument('-b', '--bounds-dir', required=True, help='Directory containing GeoJSONL files')
+    parser.add_argument('-o', '--output-file', required=True, help='Output GeoJSON file path')
+    parser.add_argument('-u', '--update', action='store_true', help='Update the output file in place')
+    parser.add_argument('-d', '--delete', nargs='+', help='List of ids to delete from the output file (only in update mode)')
 
     args = parser.parse_args()
 
-    feat_map = {}
-    if args.preexisting_file:
-        preexisting_file = Path(args.preexisting_file)
-        if not preexisting_file.exists():
-            raise FileNotFoundError(f"Preexisting file does not exist: {preexisting_file}")
+    if args.delete and not args.update:
+        raise parser.error("--delete can only be used with --update")
 
-        existing_data = json.loads(preexisting_file.read_text())
+    feat_map = {}
+    if args.update:
+        output_file = Path(args.output_file)
+        if not output_file.exists():
+            raise FileNotFoundError(f"Output file does not exist for updating: {output_file}")
+
+        existing_data = json.loads(output_file.read_text())
         for feature in existing_data.get('features', []):
             if 'properties' in feature and 'id' in feature['properties']:
                 sheet_name = feature['properties']['id']
                 feat_map[sheet_name] = feature
+    
+    if args.delete:
+        for sheet_id in args.delete:
+            if sheet_id in feat_map:
+                del feat_map[sheet_id]
 
     bounds_dir = Path(args.bounds_dir)
 

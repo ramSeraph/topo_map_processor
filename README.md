@@ -174,12 +174,13 @@ This project provides several command-line tools to work with topographic maps. 
 Collects individual GeoJSONL bound files into a single GeoJSON FeatureCollection.
 
 ```bash
-collect-bounds --bounds-dir <directory> --output-file <file> [--preexisting-file <file>]
+collect-bounds -b <directory> -o <file> [-u] [-d <id1> <id2> ...]
 ```
 
--   `--bounds-dir`: Directory containing GeoJSONL files. (Required)
--   `--output-file`: Output GeoJSON file path. (Required)
--   `--preexisting-file`: Pre existing GeoJSON file path. (Optional)
+-   `-b`, `--bounds-dir`: Directory containing GeoJSONL files. (Required)
+-   `-o`, `--output-file`: Output GeoJSON file path. (Required)
+-   `-u`, `--update`: Update the output file in place. (Optional)
+-   `-d`, `--delete`: List of ids to delete from the output file (only available in update mode). (Optional)
 
 #### `retile`
 
