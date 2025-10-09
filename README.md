@@ -293,6 +293,10 @@ The general workflow is as follows:
 
 This workflow ensures that your tile set is updated efficiently, without having to re-process the entire map collection.
 
+## Alternate Tools
+
+For a more saner/cleaner version of doing the georeferencing/tiling/retiling without using GDAL check out [wladich/map-tiler](https://github.com/wladich/map-tiler)
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a pull request.
