@@ -143,6 +143,7 @@ def cli():
         "--from-source", str(tiles_dir),
         "--from-source", f"{from_pmtiles_prefix}*.pmtiles",
         "--to-pmtiles", f"{to_pmtiles_prefix}.pmtiles",
+        "--exclude-transparent"
     ])
 
     # Upload new PMTiles and manage release assets
