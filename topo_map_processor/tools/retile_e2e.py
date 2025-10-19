@@ -8,7 +8,7 @@ from pathlib import Path
 from multiprocessing import set_start_method
 
 from pmtiles_mosaic.partition import partition_main
-from release_tools.download_from_release import cli as download_from_release_main
+from release_tools.download_from_release import main as download_from_release_main
 
 from .retile import retile_main
 from .create_force_redo_bounds import main as create_force_redo_bounds_main
