@@ -52,6 +52,7 @@ def cli():
     parser.add_argument("-g", "--gtiffs-release", required=True, help="GeoTIFFs release tag")
     parser.add_argument("-x", "--pmtiles-prefix", required=True, help="Prefix for PMTiles files")
     parser.add_argument("--bounds-file-tiled", required=True, help="Name of the bounds file in the pmtiles release (the old bounds file)")
+    parser.add_argument("--no-cache", action='store_true', required=False, help="Don't cache files locally during pmtiles partitioning")
     args = parser.parse_args()
 
     # Define paths and filenames
@@ -143,7 +144,7 @@ def cli():
         "--from-source", f"{from_pmtiles_prefix}*.pmtiles",
         "--to-pmtiles", f"{to_pmtiles_prefix}.pmtiles",
         "--exclude-transparent"
-    ])
+    ] + (["--no-cache"] if args.no_cache else []))
 
     # Upload new PMTiles and manage release assets
     print("Deleting old PMTiles files from the release...")
