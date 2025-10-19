@@ -134,6 +134,8 @@ class TopoMapProcessor:
         self.jpeg_export_quality = extra.get('jpeg_export_quality', 75)
         self.warp_jpeg_export_quality = extra.get('warp_jpeg_export_quality', 75)
         self.warp_output_height = extra.get('warp_output_height', 6500)
+        self.warp_resampling_method = extra.get('warp_resampling_method', 'bilinear')
+        self.export_resampling_method = extra.get('export_resampling_method', 'nearest') # nearest for backwards compatibility
 
 
         self.color_map = {
@@ -1790,15 +1792,17 @@ class TopoMapProcessor:
         warp_quality_config.update({'TILED': 'YES'})
         warp_quality_options = ' '.join([ f'-co {k}={v}' for k,v in warp_quality_config.items() ])
         if not set_resolution:
-            reproj_options = f'-tps -ts 0 {self.warp_output_height} -r bilinear -t_srs "EPSG:3857"' 
+            res_options = f'-ts 0 {self.warp_output_height}'
         else:
             res = self.get_resolution()
             if res == 'auto':
-                reproj_options = '-tps -r bilinear -t_srs "EPSG:3857"'
+                res_options = ''
             else:
                 if type(res) is not list:
                     res = [res, res]
-                reproj_options = f'-tps -tr {res[0]} {res[1]} -r bilinear -t_srs "EPSG:3857"' 
+                res_options = f'-tr {res[0]} {res[1]}' 
+
+        reproj_options = f'-tps {res_options} -r {self.warp_resampling_method} -t_srs "EPSG:3857"' 
 
         #nodata_options = '-dstnodata 0'
         nodata_options = '-dstalpha'
@@ -1903,7 +1907,8 @@ class TopoMapProcessor:
         mask_options = '--config GDAL_TIFF_INTERNAL_MASK YES  -b 1 -b 2 -b 3 -mask 4'
         perf_options = '--config GDAL_CACHEMAX 512'
         cog_options = '-of COG'
-        cmd = f'gdal_translate {perf_options} {mask_options} {creation_opts} {cog_options} {filename} {out_filename}'
+        resampling_options = f'-r {self.export_resampling_method}'
+        cmd = f'gdal_translate {perf_options} {mask_options} {creation_opts} {cog_options} {resampling_options} {filename} {out_filename}'
         self.run_external(cmd)
 
     def export(self):
