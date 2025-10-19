@@ -8,6 +8,7 @@ authors = [
     { name = "Sreeram Kandimalla", email = "kandimalla.sreeram@gmail.com" },
 ]
 dependencies = [
+    "gh-release-tools>=0.1.12",
     "mercantile>=1.2.1",
     "pmtiles-mosaic>=0.1.0",
     "requests>=2.32.4",

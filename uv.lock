@@ -315,6 +315,15 @@ wheels = [
 ]
 
 [[package]]
+name = "gh-release-tools"
+version = "0.1.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/10/f77f6fbb7c15e78614ac1510fdfc86d9464ce5bb48cac49f80b069c3e430/gh_release_tools-0.1.12.tar.gz", hash = "sha256:c50572b4c41ac7916b28074bb5a4fa63bedcd8b806e6cddb3faf171d2ee9119b", size = 7426 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/c3/2841bfd6f08b6c74147fa7e310f975918f9cf5b39dbb0e22bc24a2925063/gh_release_tools-0.1.12-py3-none-any.whl", hash = "sha256:1f6f2e65513525e038d8b6040f42e424941d3578eab04e6d2c16eb5cd5a75ba5", size = 11449 },
+]
+
+[[package]]
 name = "idna"
 version = "3.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1260,6 +1269,7 @@ wheels = [
 name = "topo-map-processor"
 source = { editable = "." }
 dependencies = [
+    { name = "gh-release-tools" },
     { name = "mercantile" },
     { name = "pmtiles-mosaic" },
     { name = "requests" },
@@ -1283,6 +1293,7 @@ parse = [
 [package.metadata]
 requires-dist = [
     { name = "easyocr", marker = "extra == 'easyocr'", specifier = ">=1.7.2" },
+    { name = "gh-release-tools", specifier = ">=0.1.12" },
     { name = "imgcat", marker = "extra == 'parse'", specifier = ">=0.6.0" },
     { name = "mercantile", specifier = ">=1.2.1" },
     { name = "numpy", marker = "extra == 'parse'", specifier = ">=2.3.1" },

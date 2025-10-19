@@ -8,6 +8,7 @@ from pathlib import Path
 from multiprocessing import set_start_method
 
 from pmtiles_mosaic.partition import partition_main
+from release_tools.download_from_release import cli as download_from_release_main
 
 from .retile import retile_main
 from .create_force_redo_bounds import main as create_force_redo_bounds_main
@@ -112,15 +113,13 @@ def cli():
 
     # Download TIFFs
     print("Downloading TIFFs...")
-    with open(sheets_to_pull_list_outfile) as f:
-        for line in f:
-            fname = line.strip()
-            if fname:
-                print(f"Pulling {fname}")
-                try:
-                    run_command(["gh", "release", "download", args.gtiffs_release, "-p", fname, "-D", str(tiffs_dir), "--clobber"])
-                except subprocess.CalledProcessError as e:
-                    print(f"Failed to download {fname}. It might be a dummy sheet from force redo. Continuing...")
+    # The download script will report if files are not found, which is expected for dummy sheets.
+    if download_from_release_main([
+        "--release", args.gtiffs_release,
+        "--output-dir", str(tiffs_dir),
+        "--file-list", str(sheets_to_pull_list_outfile),
+    ]) != 0:
+        print("Some TIFFs failed to download. This may be expected for dummy sheets from force redo. Continuing...", file=sys.stderr)
 
     sheets_to_pull_list_outfile.unlink()
 
