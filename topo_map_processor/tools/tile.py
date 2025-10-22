@@ -75,7 +75,9 @@ def cli():
 
     parser = argparse.ArgumentParser(description='Tile the GTiffs and create a TileJSON file')
     parser.add_argument('--tiles-dir', required=True, help='Directory to store the tiles')
-    parser.add_argument('--tiffs-dir', required=True, help='Directory with GTiffs to tile')
+    tiffs_group = parser.add_mutually_exclusive_group(required=True)
+    tiffs_group.add_argument('--tiffs-dir', help='Directory with GTiffs to tile')
+    tiffs_group.add_argument('--tiffs-list-file', help='File containing a list of tiff files to tile')
     parser.add_argument('--max-zoom', type=int, required=True, help='Maximum zoom level for tiling')
     parser.add_argument('--min-zoom', type=int, default=0, help='Minimum zoom level for tiling')
     parser.add_argument('--tile-extension', type=str, default='webp', choices=SUPPORTED_FORMATS, help='Tile file extension (default: webp)')
@@ -102,8 +104,15 @@ def cli():
     tiles_dir = Path(args.tiles_dir)
     tiles_dir.mkdir(parents=True, exist_ok=True)
 
-    file_names = list(glob.glob(f'{args.tiffs_dir}/*.tif'))
-    file_names = [ str(Path(f).resolve()) for f in file_names ]
+    if args.tiffs_dir:
+        file_names = list(glob.glob(f'{args.tiffs_dir}/*.tif'))
+        file_names = [ str(Path(f).resolve()) for f in file_names ]
+    else:
+        tiff_list_path = Path(args.tiffs_list_file)
+        if not tiff_list_path.exists():
+            parser.error(f'Tiffs list file {args.tiffs_list_file} does not exist')
+        file_names = [str(Path(line.strip()).resolve()) for line in tiff_list_path.read_text().splitlines() if line.strip()]
+
     print(f'total files: {len(file_names)}')
 
     file_list_file = Path('files_to_tile.txt')

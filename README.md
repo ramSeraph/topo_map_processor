@@ -226,7 +226,8 @@ tile --tiles-dir <dir> --tiffs-dir <dir> --max-zoom <zoom> --name <name> --descr
 ```
 
 -   `--tiles-dir`: Directory to store the output tiles. (Required)
--   `--tiffs-dir`: Directory containing the input GeoTIFF files. (Required)
+-   `--tiffs-dir`: Directory containing the input GeoTIFF files. (Optional if `--tiffs-list-file` is used)
+-   `--tiffs-list-file`: File containing a list of tiff files to tile. (Optional if `--tiffs-dir` is used)
 -   `--max-zoom`: Maximum zoom level for tiling. (Required)
 -   `--name`: Name of the mosaic. (Required)
 -   `--description`: Description of the mosaic. (Required)
