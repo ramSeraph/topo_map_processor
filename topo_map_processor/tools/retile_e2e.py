@@ -50,10 +50,13 @@ def cli():
     parser = argparse.ArgumentParser(description="End-to-end retiling script.")
     parser.add_argument("-p", "--pmtiles-release", required=True, help="PMTiles release tag")
     parser.add_argument("-g", "--gtiffs-release", required=True, help="GeoTIFFs release tag")
+    parser.add_argument("-r", "--repo", required=False, help="Github repo to download from and upload to")
     parser.add_argument("-x", "--pmtiles-prefix", required=True, help="Prefix for PMTiles files")
     parser.add_argument("--bounds-file-tiled", required=True, help="Name of the bounds file in the pmtiles release (the old bounds file)")
     parser.add_argument("--no-cache", action='store_true', required=False, help="Don't cache files locally during pmtiles partitioning")
     args = parser.parse_args()
+
+    repo_arg = ["--repo", args.repo] if args.repo else []
 
     # Define paths and filenames
     sheets_to_pull_list_outfile = Path("sheets_to_pull_list.txt")
@@ -75,10 +78,10 @@ def cli():
 
     # Download bounds files
     print("Downloading new bounds file from gtiffs release...")
-    run_command(["gh", "release", "download", args.gtiffs_release, "-p", "bounds.geojson", "--clobber", "-O", str(new_bounds_file)])
+    run_command(["gh", "release", "download", args.gtiffs_release, "-p", "bounds.geojson", "--clobber", "-O", str(new_bounds_file)] + repo_arg)
     
     print("Downloading old bounds file from pmtiles release...")
-    run_command(["gh", "release", "download", args.pmtiles_release, "-p", args.bounds_file_tiled, "--clobber", "-O", str(old_bounds_file)])
+    run_command(["gh", "release", "download", args.pmtiles_release, "-p", args.bounds_file_tiled, "--clobber", "-O", str(old_bounds_file)] + repo_arg)
 
     # Create force redo bounds file
     print("Creating force redo bounds file...")
@@ -98,7 +101,7 @@ def cli():
 
     # Download original PMTiles
     print("Getting original PMTiles files...")
-    run_command(["gh", "release", "download", args.pmtiles_release, "-D", str(from_pmtiles_dir), "-p", f"{args.pmtiles_prefix}*"])
+    run_command(["gh", "release", "download", args.pmtiles_release, "-D", str(from_pmtiles_dir), "-p", f"{args.pmtiles_prefix}*"] + repo_arg)
 
     # Get list of sheets to pull
     print("Getting list of sheets to pull...")
@@ -115,11 +118,12 @@ def cli():
     # Download TIFFs
     print("Downloading TIFFs...")
     # The download script will report if files are not found, which is expected for dummy sheets.
-    if download_from_release_main([
+    download_args = [
         "--release", args.gtiffs_release,
         "--output-dir", str(tiffs_dir),
         "--file-list", str(sheets_to_pull_list_outfile),
-    ]) != 0:
+    ] + repo_arg
+    if download_from_release_main(download_args) != 0:
         print("Some TIFFs failed to download. This may be expected for dummy sheets from force redo. Continuing...", file=sys.stderr)
 
     sheets_to_pull_list_outfile.unlink()
@@ -150,18 +154,18 @@ def cli():
     print("Deleting old PMTiles files from the release...")
     old_pmtiles = glob.glob(f"{from_pmtiles_dir}/{args.pmtiles_prefix}*")
     for pmtile in old_pmtiles:
-        run_command(["gh", "release", "delete-asset", args.pmtiles_release, Path(pmtile).name, "-y"])
+        run_command(["gh", "release", "delete-asset", args.pmtiles_release, Path(pmtile).name, "-y"] + repo_arg)
 
     print("Uploading new PMTiles files...")
     new_pmtiles = glob.glob(f"{to_pmtiles_prefix}*")
-    run_command(["gh", "release", "upload", args.pmtiles_release, "--clobber"] + new_pmtiles)
+    run_command(["gh", "release", "upload", args.pmtiles_release, "--clobber"] + repo_arg + new_pmtiles)
 
     # Handle bounds file
     print("Uploading new bounds file to pmtiles release...")
     upload_bounds_file = Path(args.bounds_file_tiled)
     new_bounds_file.rename(upload_bounds_file)
     
-    run_command(["gh", "release", "upload", args.pmtiles_release, str(upload_bounds_file), "--clobber"])
+    run_command(["gh", "release", "upload", args.pmtiles_release, str(upload_bounds_file), "--clobber"] + repo_arg)
     
     upload_bounds_file.unlink()
 
