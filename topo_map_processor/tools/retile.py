@@ -183,7 +183,7 @@ class Tiler:
         print('start creating base tiles')
         cmd = [
             'gdal2tiles.py',
-            '-r', 'antialias',
+            '-r', 'lanczos',
             '--verbose',
             '-w', 'none',
             # N.B. if transperent tiles are excluded, the old data might show through
@@ -210,7 +210,7 @@ class Tiler:
             # N.B. if transperent tiles are excluded, the old data might show through
             #'exclude_transparent': True,
             'profile': 'mercator',
-            'resampling': 'antialias',
+            'resampling': 'lanczos',
             'tiledriver': tile_driver,
         }
         options_dict.update(self.get_tiler_options())

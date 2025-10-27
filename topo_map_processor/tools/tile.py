@@ -136,7 +136,7 @@ def cli():
     #os.environ['GTIFF_VIRTUAL_MEM_IO'] = 'TRUE'
     cmd = [
         'gdal2tiles.py',
-        '-r', 'antialias',
+        '-r', 'lanczos',
         '--verbose',
         '--exclude', 
         '--resume', 
