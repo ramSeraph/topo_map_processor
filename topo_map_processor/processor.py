@@ -845,8 +845,12 @@ class TopoMapProcessor:
 
         map_bbox, map_min_rect, _ = self.get_maparea()
         _, _, angle = map_min_rect
+        # minAreaRect can report either [0, 90] or [-90, 0) angles.
+        # Deskew by the nearest axis so upright maps are not turned sideways.
         if angle > 45:
             angle = angle - 90
+        elif angle < -45:
+            angle = angle + 90
 
         self.ensure_dir(workdir)
 
