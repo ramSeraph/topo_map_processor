@@ -188,10 +188,12 @@ Retiles a specific list of sheets (GeoTIFFs) or a specific area and updates the 
 
 The tool works in two stages. First, it calculates the full set of sheets that need to be processed (the "pull list"), which includes the sheets from the input list plus any adjacent sheets that share tiles. You can run the tool with `--sheets-to-pull-list-outfile` to generate this list and then exit. This is useful for fetching the required GeoTIFFs before proceeding.
 
-In the second stage, it retiles the affected area. It uses the pull list to create a temporary virtual raster (`.vrt`), generates new base tiles for the affected region, and then reconstructs the upper-level tiles by pulling existing, unaffected tiles from the PMTiles source.
+In the second stage, it uses the pull list to create a common virtual raster (`.vrt`) and renders only affected base tiles in geographic batches. Each batch spans at most 32 × 32 tiles by default. All batches read the same source mosaic, so overlapping sheets have consistent priority and resampling does not introduce batch boundaries. Completed batches move their tiles into a shared staging directory; every base tile belongs to exactly one batch. After all batches complete, the tool reconstructs upper-level tiles using the staged results and existing, unaffected tiles from the PMTiles source. Transparent replacement tiles are retained to clear removed content.
+
+`retile-e2e` uses the same batching automatically and packages and publishes the combined result once. Both commands accept `--batch-size` to set the maximum width and height of a base-tile batch. This is batching within one invocation; it does not persist a checkpoint across workflow runs.
 
 ```bash
-retile [--retile-list-file <file>] --bounds-file <file> [--force-redo-bounds-file <file>] [--max-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-source <source>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>] [--tile-quality <quality>]
+retile [--retile-list-file <file>] --bounds-file <file> [--force-redo-bounds-file <file>] [--max-zoom <zoom>] [--tiffs-dir <dir>] [--tiles-dir <dir>] [--from-source <source>] [--sheets-to-pull-list-outfile <file>] [--num-parallel <processes>] [--tile-quality <quality>] [--batch-size <tiles>]
 ```
 
 -   `--retile-list-file`: File containing the list of sheets to retile. (Optional)
@@ -204,6 +206,7 @@ retile [--retile-list-file <file>] --bounds-file <file> [--force-redo-bounds-fil
 -   `--sheets-to-pull-list-outfile`: If provided, the script will only calculate the full list of sheets that need to be processed (including adjacent ones) and write it to this file, then exit.
 -   `--num-parallel`: Number of parallel processes to use for tiling (default: number of CPU cores).
 -   `--tile-quality`: Quality of compression for webp and jpeg (default: 75).
+-   `--batch-size`: Maximum width and height of each base-tile batch in tiles (default: 32). Only affected tiles inside each batch are rendered.
 
 #### `create-force-redo-bounds`
 

@@ -5,6 +5,10 @@ import sys
 import json
 import argparse
 import tempfile
+import shlex
+import shutil
+from collections import defaultdict
+from contextlib import contextmanager
 
 import time
 import subprocess
@@ -16,10 +20,13 @@ from multiprocessing import cpu_count, Pool, set_start_method
 
 import mercantile
 from shapely.geometry import shape
+from osgeo import gdal
 
 from osgeo_utils.gdal2tiles import (
-    submain as gdal2tiles_main,
+    create_base_tile,
     create_overview_tile,
+    process_args as gdal2tiles_process_args,
+    TileDetail,
     TileJobInfo, 
     GDAL2Tiles, 
     DividedCache,
@@ -46,6 +53,35 @@ class AttrDict(dict):
     def __init__(self, *args, **kwargs):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
+
+
+def base_tile_batches(tiles, batch_size=32):
+    """Assign each XYZ tile to one bounded geographic batch."""
+    if batch_size < 1:
+        raise ValueError('batch size must be positive')
+    batches = defaultdict(set)
+    for tile in tiles:
+        batches[(tile.z, tile.x // batch_size, tile.y // batch_size)].add(tile)
+    return [batches[key] for key in sorted(batches)]
+
+
+@contextmanager
+def gdal_exceptions():
+    """Restore the caller's error handling, including on GDAL 3.8."""
+    previously_enabled = gdal.GetUseExceptions()
+    gdal.UseExceptions()
+    try:
+        yield
+    finally:
+        if not previously_enabled:
+            gdal.DontUseExceptions()
+
+
+def render_base_tile(conf, detail):
+    # Spawned workers do not inherit the parent's GDAL exception setting.
+    with gdal_exceptions():
+        create_base_tile(conf, detail)
+
 
 class DiskTilesHandler:
     def __init__(self, tiles_dir, tile_extension):
@@ -92,7 +128,7 @@ class DiskTilesHandler:
  
 class Tiler:
     def __init__(self, tiles_dir, tiffs_dir,
-                 orig_tile_source, tile_extension, tile_quality, pool):
+                 orig_tile_source, tile_extension, tile_quality, pool, batch_size=32):
 
         self.disk_handler = DiskTilesHandler(tiles_dir, tile_extension)
         self.orig_tile_source = orig_tile_source
@@ -100,6 +136,7 @@ class Tiler:
         self.tile_extension = tile_extension
         self.tile_quality = tile_quality
         self.pool = pool
+        self.batch_size = batch_size
 
     def convert_paths_in_vrt(self, vrt_file):
         # <SourceFilename relativeToVRT="1">40M_15.tif</SourceFilename>
@@ -113,16 +150,14 @@ class Tiler:
         vrt_file.write_text(replaced)
 
 
-    def create_vrt_file(self, sheets):
+    def create_vrt_file(self, sheets, background_sheets=()):
         vrt_file = self.tiffs_dir.joinpath('combined.vrt')
-        if vrt_file.exists():
-            return vrt_file
-        tiff_list = [ self.tiffs_dir.joinpath(f'{sheet}').resolve() for sheet in sheets ]
-        tiff_list = [ str(f) for f in tiff_list if f.exists() ]
-
-        tiff_list_str = ' '.join(tiff_list)
-
-        run_external(f'gdalbuildvrt {vrt_file} {tiff_list_str}')
+        # Use the same source order and native pixel grid for every batch.
+        # Do not mix coarse dummy rasters into the mosaic's average resolution.
+        # A dummy provides an empty source only when all real sheets were removed.
+        ordered_sheets = sorted(sheets) or sorted(background_sheets)
+        tiff_list = [str(self.tiffs_dir.joinpath(sheet).resolve()) for sheet in ordered_sheets]
+        run_external(shlex.join(['gdalbuildvrt', str(vrt_file), *tiff_list]))
         self.convert_paths_in_vrt(vrt_file)
 
         return vrt_file
@@ -176,34 +211,108 @@ class Tiler:
 
         raise ValueError(f'Unsupported tile extension: {self.tile_extension}')
 
-    def create_base_tiles(self, sheets, max_zoom):
+    def create_base_tiles(self, sheets, max_zoom, affected_tiles, background_sheets=()):
+        batches = base_tile_batches(affected_tiles, self.batch_size)
+        if not batches:
+            return
         print('creating vrt file from sheets involved')
-        vrt_file = self.create_vrt_file(sheets)
+        vrt_file = self.create_vrt_file(sheets, background_sheets)
+        print(f'Creating {len(affected_tiles)} base tiles in {len(batches)} geographic batches', flush=True)
 
-        print('start creating base tiles')
-        cmd = [
-            'gdal2tiles.py',
-            '-r', 'lanczos',
-            '--verbose',
-            '-w', 'none',
-            # N.B. if transperent tiles are excluded, the old data might show through
-            #'--exclude',
-            '--resume', 
-            '--xyz', 
-            '--processes', f'{self.pool._processes}', 
-            '-z', f'{max_zoom}'
-        ] + self.get_tiler_cmd_params() + [
-            str(vrt_file), str(self.disk_handler.dir)
-        ]
+        # The common VRT preserves overlap priority, the pixel grid, and all
+        # neighboring source pixels. Only the output job bounds change; cropping
+        # the input raster separately for each batch could introduce seams.
+        with (
+            tempfile.TemporaryDirectory(
+                prefix='.retile-batches-', dir=self.disk_handler.dir.parent,
+            ) as workdir,
+            gdal_exceptions(),
+        ):
+            input_file, output_folder, options = gdal2tiles_process_args([
+                '-r', 'lanczos', '--quiet', '-w', 'none', '--xyz',
+                '-z', str(max_zoom),
+            ] + self.get_tiler_cmd_params() + [str(vrt_file), workdir])
+            tiler = GDAL2Tiles(input_file, output_folder, options)
+            try:
+                tiler.open_input()
+                source_minx, source_miny, source_maxx, source_maxy = tiler.tminmax[max_zoom]
+                completed = 0
+                for index, batch in enumerate(batches, 1):
+                    batch_dir = Path(workdir) / str(index)
+                    tiler.output_folder = str(batch_dir)
+                    # GDAL stores planning bounds in TMS coordinates, while
+                    # TileDetail.ty and our ownership sets use XYZ coordinates.
+                    minx, maxx = min(t.x for t in batch), max(t.x for t in batch)
+                    xyz_miny, xyz_maxy = min(t.y for t in batch), max(t.y for t in batch)
+                    miny = (1 << max_zoom) - 1 - xyz_maxy
+                    maxy = (1 << max_zoom) - 1 - xyz_miny
+                    # Cleared areas can lie beyond the remaining source mosaic.
+                    # Plan reads only inside it, then explicitly write transparent
+                    # replacement tiles outside it instead of retaining old tiles.
+                    tiler.tminmax[max_zoom] = (
+                        max(minx, source_minx), max(miny, source_miny),
+                        min(maxx, source_maxx), min(maxy, source_maxy),
+                    )
+                    conf, details = tiler.generate_base_tiles()
+                    details = [d for d in details if mercantile.Tile(d.tx, d.ty, d.tz) in batch]
+                    covered = {mercantile.Tile(d.tx, d.ty, d.tz) for d in details}
+                    expected_covered = {
+                        t for t in batch
+                        if source_minx <= t.x <= source_maxx and
+                        source_miny <= (1 << max_zoom) - 1 - t.y <= source_maxy
+                    }
+                    if covered != expected_covered:
+                        raise RuntimeError('GDAL did not plan every affected tile inside the source mosaic')
+                    for tile in sorted(batch - covered):
+                        batch_dir.joinpath(str(tile.z), str(tile.x)).mkdir(parents=True, exist_ok=True)
+                        details.append(TileDetail(
+                            tx=tile.x, ty=tile.y, tz=tile.z,
+                            rx=0, ry=0, rxsize=0, rysize=0,
+                            wx=0, wy=0, wxsize=0, wysize=0,
+                            querysize=tiler.querysize,
+                        ))
+                    if len(details) != len(batch):
+                        raise RuntimeError('GDAL did not plan every tile assigned to the batch')
 
-        gdal2tiles_main(cmd, pool=self.pool, called_from_main=True)
-        vrt_file.unlink()
+                    print(
+                        f'Base batch {index}/{len(batches)}: {len(details)} tiles, '
+                        f'XYZ x={minx}..{maxx}, y={xyz_miny}..{xyz_maxy}',
+                        flush=True,
+                    )
+                    chunksize = max(1, min(128, len(details) // self.pool._processes))
+                    for _ in self.pool.imap_unordered(
+                        partial(render_base_tile, conf), details, chunksize=chunksize,
+                    ):
+                        pass
+
+                    # A batch never reads partially rendered output from another
+                    # batch. Publish only its owned tiles after every job succeeds.
+                    # Keep transparent tiles: they replace old content in PMTiles.
+                    output = DiskTilesHandler(batch_dir, self.tile_extension)
+                    for tile in batch:
+                        path = output.get_tile_file(tile)
+                        if not path.is_file() or path.stat().st_size == 0:
+                            raise RuntimeError(f'Base batch did not produce tile {tile}')
+                    for tile in batch:
+                        self.disk_handler.preprare_dir(tile)
+                        output.get_tile_file(tile).replace(self.disk_handler.get_tile_file(tile))
+                    shutil.rmtree(batch_dir)
+                    completed += len(batch)
+                    print(
+                        f'Completed base batch {index}/{len(batches)} '
+                        f'({completed}/{len(affected_tiles)} tiles)',
+                        flush=True,
+                    )
+            finally:
+                tiler.warped_input_dataset = None
+                shutil.rmtree(tiler.tmp_dir, ignore_errors=True)
+                vrt_file.unlink(missing_ok=True)
 
     def create_upper_tiles(self, z, tiles_to_create):
         tile_driver = self.get_tile_driver()
     
         options_dict = {
-            'resume': True,
+            'resume': False,
             'verbose': False,
             'quiet': False,
             'xyz': True,
@@ -268,14 +377,14 @@ class Tiler:
             tile_file.write_bytes(t_data)
 
 
-    def retile(self, sheet_list, affected_base_tiles):
+    def retile(self, sheet_list, affected_base_tiles, background_sheets=()):
     
         max_zoom = self.orig_tile_source.max_zoom
         min_zoom = self.orig_tile_source.min_zoom
     
         self.disk_handler.init()
     
-        self.create_base_tiles(sheet_list, max_zoom)
+        self.create_base_tiles(sheet_list, max_zoom, affected_base_tiles, background_sheets)
     
         print('deleting unwanted base tiles')
         self.disk_handler.delete_unwanted_tiles(affected_base_tiles, max_zoom)
@@ -398,8 +507,10 @@ def create_dummy_sheets(dummy_bounds_file, tiffs_dir):
     print('creating dummy sheets for force redo areas')
     dummy_sheets_to_box = get_sheet_data(dummy_bounds_file, dummy=True)
 
+    sheets = set()
     for sheet_no, box in dummy_sheets_to_box.items():
         file = tiffs_dir.joinpath(f'{sheet_no}.tif')
+        sheets.add(file.name)
         if file.exists():
             continue
 
@@ -412,6 +523,8 @@ def create_dummy_sheets(dummy_bounds_file, tiffs_dir):
         run_external(cmd)
         cmd = f'gdal_translate -co TILING_SCHEME=GoogleMapsCompatible -co COMPRESS=JPEG -co QUALITY=100 --config GDAL_TIFF_INTERNAL_MASK YES  -b 1 -b 2 -b 3 -mask 4 --config GDAL_CACHEMAX 512 -of COG {temp_file_1} {file}'
         run_external(cmd)
+
+    return sheets
 
 def retile_main(args):
 
@@ -427,8 +540,11 @@ def retile_main(args):
     parser.add_argument('--tiffs-dir', help='Directory where the tiffs are present')
     parser.add_argument('--num-parallel', type=int, default=cpu_count(), help='Number of parallel processes to use for tiling (default: number of CPU cores)')
     parser.add_argument('--tile-quality', default=75, help='quality of compression for webp and jpeg (default: 75)')
+    parser.add_argument('--batch-size', type=int, default=32, help='Maximum width and height of a base-tile batch in tiles (default: 32)')
 
     args = parser.parse_args(args)
+    if args.batch_size < 1:
+        parser.error('--batch-size must be positive')
 
     if not args.retile_list_file and not args.force_redo_bounds_file:
         parser.error('At least one of --retile-list-file or --force-redo-bounds-file must be provided.')
@@ -490,8 +606,11 @@ def retile_main(args):
     print('check the sheets availability')
     check_sheets(sheets_to_pull, tiffs_dir)
 
-    if force_redo_bounds_file is not None:
-        create_dummy_sheets(force_redo_bounds_file, tiffs_dir)
+    background_sheets = set()
+    # Ordinary batches read the real mosaic. Empty replacement jobs handle
+    # removed areas outside it; a dummy source is needed only if none remain.
+    if force_redo_bounds_file is not None and not sheets_to_pull:
+        background_sheets = create_dummy_sheets(force_redo_bounds_file, tiffs_dir)
 
     metadata = orig_source.get_metadata()
     tile_extension = metadata['format']
@@ -512,8 +631,9 @@ def retile_main(args):
                       orig_source, 
                       tile_extension,
                       args.tile_quality,
-                      pool)
-        tiler.retile(sheets_to_pull, affected_base_tiles)
+                      pool,
+                      batch_size=args.batch_size)
+        tiler.retile(sheets_to_pull, affected_base_tiles, background_sheets)
 
     return 0
 

@@ -54,7 +54,10 @@ def cli():
     parser.add_argument("-x", "--pmtiles-prefix", required=True, help="Prefix for PMTiles files")
     parser.add_argument("--bounds-file-tiled", required=True, help="Name of the bounds file in the pmtiles release (the old bounds file)")
     parser.add_argument("--no-cache", action='store_true', required=False, help="Don't cache files locally during pmtiles partitioning")
+    parser.add_argument("--batch-size", type=int, default=32, help="Maximum width and height of a base-tile batch in tiles (default: 32)")
     args = parser.parse_args()
+    if args.batch_size < 1:
+        parser.error('--batch-size must be positive')
 
     repo_arg = ["--repo", args.repo] if args.repo else []
 
@@ -136,6 +139,7 @@ def cli():
         "--from-source", f"{from_pmtiles_prefix}*.pmtiles",
         "--tiles-dir", str(tiles_dir),
         "--tiffs-dir", str(tiffs_dir),
+        "--batch-size", str(args.batch_size),
     ])
 
     old_bounds_file.unlink()
